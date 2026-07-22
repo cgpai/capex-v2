@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
+    "dev:tunnel": "DISABLE_HMR=true TUNNEL_MODE=true next dev -H 0.0.0.0 --webpack",
     "build": "next build",
     "start": "next start",
+    "start:public": "next start -H 0.0.0.0",
     "lint": "eslint",
     "verify:secure": "node scripts/verify-secure-production-build.mjs",
     "verify:middleware": "node scripts/verify-middleware-security.mjs",

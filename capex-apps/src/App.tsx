@@ -111,6 +111,7 @@ import { AuthSessionSync } from './components/auth/AuthSessionSync';
 import { SessionExpiryWarning } from './components/auth/SessionExpiryWarning';
 import { registerAuthFailureHandler } from './lib/auth/authFailureHandler';
 import {
+  clearServerAuthCookies,
   fetchAuthMe,
   invalidateAuthProbeCache,
   invalidateStaleAuthCookies,
@@ -673,10 +674,13 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
 
     let cancelled = false;
 
-    const finishUnauthenticated = () => {
+    const finishUnauthenticated = (options?: { clearServer?: boolean }) => {
       if (cancelled) return;
       invalidateAuthProbeCache();
       invalidateStaleAuthCookies();
+      if (options?.clearServer !== false) {
+        void clearServerAuthCookies();
+      }
       clearCachedAuthUser();
       clearCachedRoles();
       clearCachedBootstrap();
@@ -756,7 +760,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
               oauthCallback: isOAuthCallbackFromUrl(),
             })
           ) {
-            finishUnauthenticated();
+            finishUnauthenticated({ clearServer: false });
             return;
           }
 
@@ -2032,7 +2036,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     return (
       <ToastProvider showToast={showToast}>
         <div className="h-screen">
-          <LazyLoginPage onLogin={handleLogin} />
+          <LazyLoginPage />
           {toast && (
             <Toast
               key={toast.id}

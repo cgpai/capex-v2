@@ -224,44 +224,6 @@ async function fetchFilteredProjects(
   return rows;
 }
 
-const EXECUTIVE_ASSET_SELECT = `
-  id, project_id, asset_code, asset_name, consumed_budget, is_goods_received,
-  lifecycle_status, workflow_set_id, po_number,
-  projects!inner (
-    id, period_name, type, is_pipeline_project, status,
-    hospital_units_config!inner ( code, name, archetype_id )
-  )
-`;
-
-function applyExecutiveSummaryAssetFilters(
-  query: { eq: (col: string, val: unknown) => unknown; in: (col: string, vals: string[]) => unknown; or: (filter: string) => unknown },
-  periodName: string,
-  filters: ExecutiveSummaryListFilters,
-) {
-  let q: any = query.eq('projects.period_name', periodName.trim());
-  if (filters.archetypeId) {
-    q = q.eq('projects.hospital_units_config.archetype_id', filters.archetypeId);
-  }
-  if (filters.huCodes.length > 0) {
-    q = q.in('projects.hospital_units_config.code', filters.huCodes);
-  }
-  if (filters.capexType === 'pipeline') {
-    q = q.or('projects.is_pipeline_project.eq.true,projects.type.eq."Project Pipeline"');
-  } else if (filters.capexType === 'strategic') {
-    q = q.eq('projects.type', 'Strategic Projects').eq('projects.is_pipeline_project', false);
-  } else if (filters.capexType === 'general') {
-    q = q.eq('projects.type', 'General & Routine Assets');
-  }
-  if (filters.status === 'on-track') {
-    q = q.eq('projects.status', 0);
-  } else if (filters.status === 'at-risk') {
-    q = q.eq('projects.status', 1);
-  } else if (filters.status === 'off-track') {
-    q = q.eq('projects.status', 2);
-  }
-  return q;
-}
-
 function hasScopeFilter(filters: ExecutiveSummaryListFilters): boolean {
   return Boolean(
     filters.archetypeId ||
@@ -456,44 +418,35 @@ function buildCapexDonutSlices(stageCounts: Record<AssetPipelineStage, number>):
 
 async function fetchAssetsByProject(
   client: SupabaseClient,
-  periodName: string,
-  filters: ExecutiveSummaryListFilters,
+  _periodName: string,
+  _filters: ExecutiveSummaryListFilters,
   projectIdSet: Set<string>,
 ): Promise<Map<string, AssetRow[]>> {
   const byProject = new Map<string, AssetRow[]>();
   if (projectIdSet.size === 0) return byProject;
 
-  let from = 0;
-  const batch = 500;
-  while (true) {
-    let q = client.from('assets').select(EXECUTIVE_ASSET_SELECT);
-    q = applyExecutiveSummaryAssetFilters(q, periodName, filters);
-    const { data, error } = await q.range(from, from + batch - 1);
-    if (error) throw new Error(`dashboard assets: ${error.message}`);
-    if (!data?.length) break;
+  const select =
+    'id, project_id, asset_code, asset_name, consumed_budget, is_goods_received, lifecycle_status, workflow_set_id, po_number';
+  const rows = await fetchRecordsInBatches(client, 'assets', 'project_id', [...projectIdSet], select);
 
-    for (const row of data) {
-      const r = row as AssetRow & { projects?: { id?: string } };
-      const pid = String(r.project_id ?? r.projects?.id ?? '');
-      if (!projectIdSet.has(pid)) continue;
-      const asset: AssetRow = {
-        id: String(r.id),
-        project_id: pid,
-        asset_code: r.asset_code,
-        asset_name: r.asset_name,
-        consumed_budget: r.consumed_budget,
-        is_goods_received: r.is_goods_received,
-        lifecycle_status: r.lifecycle_status,
-        workflow_set_id: r.workflow_set_id,
-        po_number: r.po_number,
-      };
-      const list = byProject.get(pid) ?? [];
-      list.push(asset);
-      byProject.set(pid, list);
-    }
-
-    if (data.length < batch) break;
-    from += batch;
+  for (const row of rows) {
+    const r = row as AssetRow;
+    const pid = String(r.project_id ?? '');
+    if (!projectIdSet.has(pid)) continue;
+    const asset: AssetRow = {
+      id: String(r.id),
+      project_id: pid,
+      asset_code: r.asset_code,
+      asset_name: r.asset_name,
+      consumed_budget: r.consumed_budget,
+      is_goods_received: r.is_goods_received,
+      lifecycle_status: r.lifecycle_status,
+      workflow_set_id: r.workflow_set_id,
+      po_number: r.po_number,
+    };
+    const list = byProject.get(pid) ?? [];
+    list.push(asset);
+    byProject.set(pid, list);
   }
 
   return byProject;
@@ -1116,9 +1069,10 @@ export async function loadExecutiveDashboardMetrics(
     if (statusKey === 'ditolak') rejectedCount += 1;
   }
 
-  const [capexPipeline, fsStats] = await Promise.all([
+  const [capexPipeline, fsStats, monthlyRealization] = await Promise.all([
     buildCapexPipelineStatus(client, projects, assetsByProject, fsByProject),
     fetchPendingFsStats(client, projectIds, fsByProject),
+    fetchConsumptionByMonth(client, projectIds, assetsByProject),
   ]);
 
   const capexStatus: ExecutiveDashboardCapexStatus = {
@@ -1133,8 +1087,6 @@ export async function loadExecutiveDashboardMetrics(
 
   const categoryBreakdown = buildCategoryBreakdownFromConsumed(consumedByCategory, categoryNames);
   const budgetByUnit = buildHuUnitRows(projects, assetsByProject, huBudgetRows);
-
-  const monthlyRealization = await fetchConsumptionByMonth(client, projectIds, assetsByProject);
   const priorYearMonthly = new Array(12).fill(0) as number[];
 
   const capexTotal = capexStatus.projectCount;

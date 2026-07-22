@@ -136,6 +136,7 @@ function main() {
     const covered =
       sample.startsWith('/api/auth/login') ||
       sample.startsWith('/api/auth/refresh') ||
+      sample.startsWith('/api/auth/clear-cookies') ||
       sample.startsWith('/api/auth/exchange') ||
       sample.startsWith('/api/auth/forgot-password') ||
       sample.startsWith('/api/auth/azure') ||

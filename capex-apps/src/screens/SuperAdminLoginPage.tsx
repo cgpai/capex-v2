@@ -1,15 +1,22 @@
 'use client';
 
 import React, { useEffect, useState, memo } from 'react';
-import { fetchAuthMe, loginWithBackend, logoutBackend } from '../lib/auth/authApi';
+import type { User } from '../types';
+import { fetchAuthMe, invalidateAuthProbeCache, loginWithBackend, logoutBackend, setSessionCookieHint, clearServerAuthCookies } from '../lib/auth/authApi';
 import { useBackendSession } from '../lib/auth/authConstants';
+import { isDemoMode } from '../lib/auth/demoMode';
+import { isUserSuperAdmin } from '../lib/userRoleResolution';
+import { writeCachedAuthUser } from '../lib/authSessionCache';
 
-function isSuperAdminRoleSlug(role: string | null | undefined): boolean {
-  const n = String(role ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '');
-  return n === 'superadmin' || n === 'superadministrator';
+function isSuperAdminSession(user: User | null, roleSlugs: string[]): boolean {
+  if (user && isUserSuperAdmin(user, [])) return true;
+  return roleSlugs.some((role) => {
+    const n = String(role ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+    return n === 'superadmin' || n === 'superadministrator';
+  });
 }
 
 export const SuperAdminLoginPage = memo(function SuperAdminLoginPage() {
@@ -69,9 +76,20 @@ export const SuperAdminLoginPage = memo(function SuperAdminLoginPage() {
         return;
       }
 
-      if (!result.roles.some(isSuperAdminRoleSlug)) {
+      if (!isDemoMode() && !isSuperAdminSession(result.user, result.roles)) {
         await logoutBackend({ allDevices: false });
         setError('Akses ditolak. Halaman ini hanya untuk Super Admin.');
+        return;
+      }
+
+      setSessionCookieHint(true);
+      writeCachedAuthUser(result.user);
+      invalidateAuthProbeCache();
+
+      const me = await fetchAuthMe();
+      if (!me?.authenticated || !me.user) {
+        setError('Login berhasil tapi sesi tidak tersimpan. Clear cookies lalu coba lagi.');
+        void clearServerAuthCookies();
         return;
       }
 
@@ -97,9 +115,13 @@ export const SuperAdminLoginPage = memo(function SuperAdminLoginPage() {
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-siloam-border">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-siloam-blue tracking-tight mb-6">Capex Pro</h1>
-          <h2 className="text-2xl font-bold text-siloam-text-primary">Super Admin</h2>
+          <h2 className="text-2xl font-bold text-siloam-text-primary">
+            {isDemoMode() ? 'Demo Login' : 'Super Admin'}
+          </h2>
           <p className="text-siloam-text-secondary text-sm mt-2">
-            Login manual dengan email dan password
+            {isDemoMode()
+              ? 'Login password untuk demo (LAN / localhost). Semua role boleh masuk.'
+              : 'Login manual dengan email dan password'}
           </p>
         </div>
 
@@ -178,6 +200,8 @@ export const SuperAdminLoginPage = memo(function SuperAdminLoginPage() {
                 </svg>
                 Memproses...
               </>
+            ) : isDemoMode() ? (
+              'Sign in (Demo)'
             ) : (
               'Sign in as Super Admin'
             )}

@@ -42,6 +42,13 @@ export class AuthUserResolver {
     return createSupabaseClient(key, { accessToken });
   }
 
+  /** Fresh service-role client for server reads (never inherits Supabase Auth session from signIn). */
+  createServiceReadClient(): SupabaseClient {
+    const serviceKey = getSupabaseServiceKey();
+    if (serviceKey) return createSupabaseClient(serviceKey);
+    return this.createAnonClient();
+  }
+
   async resolveAppUserByAuthId(
     client: SupabaseClient,
     authId: string,
@@ -140,7 +147,10 @@ export class AuthUserResolver {
       throw new UnauthorizedException('User not registered in application');
     }
 
-    const assignments = await this.loadAssignments(client, row.id);
+    const assignments = await this.loadAssignments(
+      this.createServiceReadClient(),
+      row.id,
+    );
     const roles = [
       ...new Set(assignments.map((a) => roleNameToSlug(a.roleName))),
     ] as EnterpriseRoleSlug[];
@@ -159,7 +169,7 @@ export class AuthUserResolver {
   ): Promise<{ roleName: string; assignedScopes: string[] }[]> {
     const { data } = await client
       .from('user_assignments')
-      .select('id, roles(*)')
+      .select('id, roles(role_name)')
       .eq('user_id', userId);
     const assignmentRows = data ?? [];
     const assignmentIds = assignmentRows

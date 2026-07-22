@@ -92,7 +92,7 @@ export async function fetchExecutiveDashboardMetricsFromBackend(
       status: filters.status ?? 'all',
       huCodes: filters.huCodes ?? [],
     },
-    { source: 'executiveSummary.dashboardMetrics', timeoutMs: 15_000 },
+    { source: 'executiveSummary.dashboardMetrics', timeoutMs: 120_000 },
   );
   return data ? normalizeExecutiveDashboardMetrics(data) : null;
 }

@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 
 const isProd = process.env.NODE_ENV === 'production';
+const disableHmr = process.env.DISABLE_HMR === 'true' || process.env.TUNNEL_MODE === 'true';
 
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
@@ -18,7 +19,8 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https:",
+      // wss: required for HTTPS tunnels; dev HMR uses ws when not DISABLE_HMR
+      "connect-src 'self' https: wss: ws:",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -34,6 +36,14 @@ const nextConfig: NextConfig = {
         headers: securityHeaders,
       },
     ];
+  },
+  webpack: (config, { dev, isServer }) => {
+    if (dev && disableHmr && !isServer) {
+      config.plugins = config.plugins?.filter(
+        (plugin) => plugin?.constructor?.name !== 'HotModuleReplacementPlugin',
+      );
+    }
+    return config;
   },
 };
 

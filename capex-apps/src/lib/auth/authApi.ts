@@ -44,7 +44,7 @@ let probeInFlight: Promise<AuthMeResponse | null> | null = null;
 
 function hasLocalSessionHint(): boolean {
   if (typeof window === 'undefined') return false;
-  return readCachedAuthUser() != null || hasSessionCookieHint();
+  return hasSessionCookieHint();
 }
 
 function clearStaleClientSessionHints(): void {
@@ -54,6 +54,20 @@ function clearStaleClientSessionHints(): void {
 
 export { setSessionCookieHint } from './sessionCookieHint';
 export function invalidateStaleAuthCookies(): void {
+  clearStaleClientSessionHints();
+}
+
+/** Best-effort: wipe httpOnly session cookies via BFF (no backend refresh — avoids login race). */
+export async function clearServerAuthCookies(): Promise<void> {
+  if (!useBackendSession() || typeof window === 'undefined') return;
+  try {
+    await fetch('/api/auth/clear-cookies', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch {
+    /* noop */
+  }
   clearStaleClientSessionHints();
 }
 
@@ -90,7 +104,10 @@ export async function probeBackendSession(options?: {
     if (!me?.authenticated && hadSessionHint && hasSessionCookieHint()) {
       const refreshOk = await refreshBackendSessionCoordinated();
       if (refreshOk) me = await fetchAuthMe();
-      else clearStaleClientSessionHints();
+      else {
+        clearStaleClientSessionHints();
+        void clearServerAuthCookies();
+      }
     }
     lastProbeAt = Date.now();
     lastProbeResult = me ?? { authenticated: false };
@@ -110,7 +127,6 @@ export function shouldRunAuthSessionProbe(options: {
   if (!useBackendSession()) return false;
   if (options.oauthCallback) return true;
   if (options.hasSessionCookies) return true;
-  if (readCachedAuthUser() != null) return true;
   return false;
 }
 
@@ -195,6 +211,7 @@ async function loginWithServerPassword(
     }
     if (data.session) updateSessionMeta(data.session);
     clearTabSessionState();
+    setSessionCookieHint(true);
     return {
       user: meUserToAppUser(data),
       roles: Array.isArray(data.roles) ? data.roles : [],

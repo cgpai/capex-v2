@@ -1,0 +1,28 @@
+# Example VPS stack — copy to server as docker-compose.yml and fill secrets.
+# IP allowlist: set IP_ALLOWLIST on both services + nginx (see nginx-capex-ip-allowlist.conf).
+
+services:
+  capex-api:
+    image: ghcr.io/cgpai/capex-api:latest
+    container_name: capex-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:3001"
+    environment:
+      NODE_ENV: production
+      IP_ALLOWLIST: "139.255.41.162,118.137.76.95"
+      CORS_ORIGINS: "https://YOUR_PUBLIC_FE_URL"
+      # SUPABASE_*, JWT_ACCESS_SECRET, etc. from capexbe/.env.example
+
+  capex-web:
+    image: ghcr.io/cgpai/capex-web:latest
+    container_name: capex-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:3000"
+    environment:
+      NODE_ENV: production
+      IP_ALLOWLIST: "139.255.41.162,118.137.76.95"
+      JWT_ACCESS_SECRET: "${JWT_ACCESS_SECRET}"
+      NEXT_PUBLIC_CAPEXBE_URL: "https://YOUR_PUBLIC_API_URL"
+      NEXT_PUBLIC_USE_BACKEND_SESSION: "true"

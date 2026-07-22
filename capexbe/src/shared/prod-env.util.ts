@@ -21,6 +21,7 @@ export function assertProductionEnv(): void {
 }
 
 export function isPasswordLoginDisabled(): boolean {
+  if (process.env.CAPEX_DEMO_MODE === 'true') return false;
   if (process.env.DISABLE_PASSWORD_LOGIN === 'true') return true;
   return process.env.NODE_ENV === 'production';
 }

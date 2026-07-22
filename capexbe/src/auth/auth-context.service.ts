@@ -61,7 +61,7 @@ export class AuthContextService {
       }
     }
     const userId = this.users.assertUserIdMatch(payload.sub, requestedUserId);
-    const client = this.users.createAnonClient();
+    const client = this.users.createServiceReadClient();
     const roles = await loadRoleSlugsForUser(client, userId);
     const { error: rlsError } = await client.rpc('set_current_user_id', {
       user_id_param: userId,

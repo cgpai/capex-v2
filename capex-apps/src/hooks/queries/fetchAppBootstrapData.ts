@@ -5,9 +5,15 @@ import { useBackendSession } from '@/lib/auth/authConstants';
 import { readCachedAuthUser } from '@/lib/authSessionCache';
 import { fetchAuthMe } from '@/lib/auth/authApi';
 
-/** User id for backend bootstrap before sessionStorage is populated. */
+/** User id for backend bootstrap — never trust local cache without a live /me in BFF mode. */
 async function resolveBootstrapUserId(): Promise<number | null> {
   if (typeof window === 'undefined') return null;
+
+  if (useBackendSession()) {
+    const me = await fetchAuthMe();
+    if (me?.authenticated && me.user?.id) return me.user.id;
+    return null;
+  }
 
   const fromSession = sessionStorage.getItem('currentUserId');
   if (fromSession) {
@@ -17,11 +23,6 @@ async function resolveBootstrapUserId(): Promise<number | null> {
 
   const cached = readCachedAuthUser();
   if (cached?.id) return cached.id;
-
-  if (useBackendSession()) {
-    const me = await fetchAuthMe();
-    if (me?.authenticated && me.user?.id) return me.user.id;
-  }
 
   return null;
 }

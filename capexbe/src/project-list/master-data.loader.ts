@@ -2,10 +2,17 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { USER_DIRECTORY_COLUMNS } from '../shared/response-sanitize.util';
 import { fetchAllRecords, normId, normRoleId, toCamelCase } from './supabase-helpers';
 
-const ROLE_LIST_COLUMNS = 'id,role_name,name';
+const ROLE_LIST_COLUMNS = 'id,role_name';
 const ROLE_PERMISSION_COLUMNS = 'role_id,hierarchy,permission';
-const USER_ASSIGNMENT_SELECT = 'id,user_id,role_id,roles(role_name,name)';
+const USER_ASSIGNMENT_SELECT = 'id,user_id,role_id,roles(role_name)';
 const ASSIGNMENT_SCOPE_COLUMNS = 'user_assignment_id,scope_type,scope_id';
+
+type RoleRef = { role_name?: string; name?: string };
+
+function roleDisplayName(roleRef: unknown): string {
+  const roleObj = (Array.isArray(roleRef) ? roleRef[0] : roleRef) as RoleRef | null | undefined;
+  return String(roleObj?.role_name ?? roleObj?.name ?? '').trim();
+}
 
 export async function getAllWorkflowSets(client: SupabaseClient): Promise<any[]> {
   const workflows = await fetchAllRecords(client, 'workflow_sets', '*');
@@ -85,9 +92,7 @@ export async function getAllUsers(client: SupabaseClient): Promise<any[]> {
         .filter((ua: any) => Number(ua.user_id) === userIdNum)
         .forEach((ua: any) => {
           const aid = Number(ua.id);
-          const roleRef = ua.roles;
-          const roleObj = Array.isArray(roleRef) ? roleRef[0] : roleRef;
-          const roleName = String(roleObj?.role_name ?? roleObj?.name ?? '').trim();
+          const roleName = roleDisplayName(ua.roles);
           const assignmentScopes =
             scopes
               ?.filter((s: any) => Number(s.user_assignment_id) === aid)
@@ -142,9 +147,7 @@ export async function getUserById(client: SupabaseClient, userId: number): Promi
   const userAssignments: any[] = [];
   for (const ua of assignmentRows) {
     const aid = Number(ua.id);
-    const roleRef = ua.roles;
-    const roleObj = Array.isArray(roleRef) ? roleRef[0] : roleRef;
-    const roleName = String(roleObj?.role_name ?? roleObj?.name ?? '').trim();
+    const roleName = roleDisplayName(ua.roles);
     const assignmentScopes =
       scopes
         ?.filter((s: any) => Number(s.user_assignment_id) === aid)

@@ -16,6 +16,52 @@ function backendBase(): string {
     .trim();
 }
 
+function decodeAccessExp(access: string): number | null {
+  try {
+    const part = access.split('.')[1];
+    if (!part) return null;
+    const padded = part + '='.repeat((4 - (part.length % 4)) % 4);
+    const payload = JSON.parse(
+      Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+    ) as { exp?: number };
+    return typeof payload.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/** When exp cannot be decoded, assume token is still valid — capexbe will reject if not. */
+function isAccessExpired(access: string, skewSec = 30): boolean {
+  const exp = decodeAccessExp(access);
+  if (exp == null) return false;
+  return exp * 1000 <= Date.now() + skewSec * 1000;
+}
+
+function clearAuthCookiesOnResponse(res: NextResponse): void {
+  res.cookies.delete(ACCESS_COOKIE);
+  res.cookies.delete(REFRESH_COOKIE);
+  res.cookies.delete(CSRF_COOKIE);
+}
+
+function sessionExpiredResponse(message = 'Session expired'): NextResponse {
+  const out = NextResponse.json({ message }, { status: 401 });
+  clearAuthCookiesOnResponse(out);
+  return out;
+}
+
+/** Only wipe session cookies when BE says the session itself is invalid — not app-level 401s. */
+function shouldClearSessionOn401(bodyText: string): boolean {
+  try {
+    const msg = String((JSON.parse(bodyText) as { message?: unknown }).message ?? '').toLowerCase();
+    if (!msg) return true;
+    if (msg.includes('invalid userid')) return false;
+    if (msg.includes('forbidden')) return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 function resolveCsrfToken(
   cookieStore: Awaited<ReturnType<typeof cookies>>,
   csrfHeader: string | null,
@@ -131,6 +177,16 @@ export async function proxyBePost(
 
   const csrfToken = resolveCsrfToken(cookieStore, csrfHeader)!;
 
+  let refreshSetCookies: string[] | null = null;
+  const access = cookieStore.get(ACCESS_COOKIE)?.value;
+  const hasRefresh = Boolean(cookieStore.get(REFRESH_COOKIE)?.value?.trim());
+  if ((!access || isAccessExpired(access)) && hasRefresh) {
+    refreshSetCookies = await refreshSessionOnServer();
+    if (!refreshSetCookies) {
+      return sessionExpiredResponse();
+    }
+  }
+
   let res = await forwardBePost(path, body, csrfToken, contentType);
   if (res.status === 503) {
     const text = await res.text();
@@ -140,12 +196,13 @@ export async function proxyBePost(
     });
   }
 
-  let refreshSetCookies: string[] | null = null;
-
-  if (res.status === 401) {
+  if (res.status === 401 && refreshSetCookies === null && hasRefresh) {
     refreshSetCookies = await refreshSessionOnServer();
     if (refreshSetCookies) {
       res = await forwardBePost(path, body, csrfToken, contentType);
+    } else {
+      const out = sessionExpiredResponse();
+      return out;
     }
   }
 
@@ -157,6 +214,10 @@ export async function proxyBePost(
 
   if (refreshSetCookies?.length) {
     applySetCookiesToResponse(out, refreshSetCookies);
+  }
+
+  if (res.status === 401 && refreshSetCookies === null && shouldClearSessionOn401(text)) {
+    clearAuthCookiesOnResponse(out);
   }
 
   return out;

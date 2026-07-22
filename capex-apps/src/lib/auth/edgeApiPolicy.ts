@@ -6,14 +6,15 @@ import { isAllowedBePath } from './bePathAllowlist';
 export const AUTH_PUBLIC_PREFIXES = [
   '/api/auth/login',
   '/api/auth/refresh',
+  '/api/auth/clear-cookies',
   '/api/auth/exchange',
   '/api/auth/forgot-password',
   '/api/auth/azure',
+  '/api/auth/me',
 ] as const;
 
 /** Auth endpoints that require a session cookie / valid edge JWT. */
 export const AUTH_SESSION_PREFIXES = [
-  '/api/auth/me',
   '/api/auth/logout',
   '/api/auth/heartbeat',
   '/api/auth/change-password',

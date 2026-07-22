@@ -45,11 +45,19 @@ export async function authenticatedFetch(
     if (!refreshed) {
       const stillValid = await isBackendSessionValid();
       if (!stillValid) {
-        authDebug('fetch 401: refresh failed and session invalid — logout');
-        const { notifyAuthFailure } = await import('./authFailureHandler');
-        notifyAuthFailure();
+        authDebug('fetch 401: session invalid — cleanup');
+        const { invalidateStaleAuthCookies, invalidateAuthProbeCache, clearServerAuthCookies } =
+          await import('./authApi');
+        invalidateStaleAuthCookies();
+        invalidateAuthProbeCache();
+        void clearServerAuthCookies();
+        const { useAuthStore } = await import('../../stores/authStore');
+        if (useAuthStore.getState().status === 'authenticated') {
+          const { notifyAuthFailure } = await import('./authFailureHandler');
+          notifyAuthFailure();
+        }
       } else {
-        authDebug('fetch 401: refresh failed but access token still valid — keep session');
+        authDebug('fetch 401: refresh failed but /me still valid — keep session');
       }
       return res;
     }

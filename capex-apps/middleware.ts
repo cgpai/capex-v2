@@ -13,12 +13,21 @@ import {
   edgeSessionPermitsBeProxy,
   resolveEdgeSession,
 } from '@/lib/auth/edgeSession';
+import { isDemoMode } from '@/lib/auth/demoMode';
+import { requestIpAllowed } from '@/lib/auth/ipAllowlist';
 
 const AUTH_RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/auth/login': { max: 8, windowMs: 15 * 60 * 1000 },
   '/api/auth/forgot-password': { max: 2, windowMs: 60 * 60 * 1000 },
   '/api/auth/refresh': { max: 60, windowMs: 15 * 60 * 1000 },
   '/api/auth/exchange': { max: 20, windowMs: 15 * 60 * 1000 },
+};
+
+const AUTH_RATE_LIMITS_DEMO: Record<string, { max: number; windowMs: number }> = {
+  '/api/auth/login': { max: 40, windowMs: 15 * 60 * 1000 },
+  '/api/auth/forgot-password': { max: 10, windowMs: 60 * 60 * 1000 },
+  '/api/auth/refresh': { max: 120, windowMs: 15 * 60 * 1000 },
+  '/api/auth/exchange': { max: 40, windowMs: 15 * 60 * 1000 },
 };
 
 const BE_PROXY_LIMIT = { max: 180, windowMs: 60 * 1000 };
@@ -49,7 +58,8 @@ function jsonError(status: number, message: string): NextResponse {
 function rateLimitAuthRoute(req: NextRequest): NextResponse | null {
   if (req.method !== 'POST') return null;
   const { pathname } = req.nextUrl;
-  const rule = AUTH_RATE_LIMITS[pathname];
+  const limits = isDemoMode() ? AUTH_RATE_LIMITS_DEMO : AUTH_RATE_LIMITS;
+  const rule = limits[pathname];
   if (!rule) return null;
 
   const ip = clientIp(req);
@@ -77,6 +87,10 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  if (!requestIpAllowed(req)) {
+    return attachRequestId(jsonError(403, 'Forbidden'), req);
+  }
+
   if (!isBackendSessionEnabled()) {
     if (isProd) {
       return attachRequestId(jsonError(503, 'Backend session is required in production'), req);
@@ -101,7 +115,9 @@ export async function middleware(req: NextRequest) {
 
   if (routeClass === 'session') {
     const beProxy = pathname.startsWith('/api/be');
-    const permitted = beProxy ? edgeSessionPermitsBeProxy(session) : edgeSessionPermits(session);
+    const permitted = beProxy
+      ? edgeSessionPermitsBeProxy(session)
+      : edgeSessionPermits(session);
 
     if (!permitted) {
       return attachRequestId(jsonError(401, 'Authentication required'), req);

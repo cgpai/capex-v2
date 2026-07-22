@@ -8,7 +8,7 @@ export async function loadRoleSlugsForUser(
 ): Promise<EnterpriseRoleSlug[]> {
   const { data } = await client
     .from('user_assignments')
-    .select('roles(role_name, name)')
+    .select('roles(role_name)')
     .eq('user_id', userId);
 
   const slugs = new Set<EnterpriseRoleSlug>();

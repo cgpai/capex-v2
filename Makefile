@@ -6,7 +6,7 @@ FE_DIR   := capex-apps
 BE_PORT  := 3001
 FE_PORT  := 3000
 
-.PHONY: help setup install env ensure-install run run-be run-fe stop check check-env logs infosec-verify
+.PHONY: help setup install env ensure-install run run-tunnel run-tunnel-demo run-public run-be run-fe stop check check-env logs infosec-verify public-url tunnel-help tunnel-cf
 
 help:
 	@echo "CAPEX dev commands:"
@@ -16,6 +16,11 @@ help:
 	@echo "  make check      Verify env files + Supabase connectivity"
 	@echo "  make infosec-verify  Run InfoSec post-hardening smoke tests"
 	@echo "  make run        Start backend (:$(BE_PORT)) + frontend (:$(FE_PORT))"
+	@echo "  make run-tunnel     Dev mode for tunnel (HMR off, no WS errors)"
+	@echo "  make run-tunnel-demo Production + cloudflared (best for sharing)"
+	@echo "  make public-url Print access URLs for allowed devices"
+	@echo "  make tunnel-help  Cursor port-forward setup (recommended)"
+	@echo "  make tunnel-cf    Cloudflare quick tunnel (if Cursor tunnel fails)"
 	@echo "  make run-be     Start backend only"
 	@echo "  make run-fe     Start frontend only"
 	@echo "  make stop       Kill processes on ports $(FE_PORT) and $(BE_PORT)"
@@ -67,6 +72,26 @@ run: stop ensure-install check-env
 		(cd $(FE_DIR) && npm run dev) & \
 		wait
 
+run-tunnel: stop ensure-install check-env
+	@echo "Starting CAPEX for HTTPS tunnel (HMR disabled — no WebSocket errors)"
+	@echo "Press Ctrl+C to stop both. Then: make tunnel-cf"
+	@trap 'echo; echo Stopping...; kill 0 2>/dev/null; exit 0' INT TERM; \
+		(cd $(BE_DIR) && npm run start:dev) & \
+		(cd $(FE_DIR) && npm run dev:tunnel) & \
+		wait
+
+public-url:
+	@chmod +x scripts/print-public-url.sh
+	@./scripts/print-public-url.sh
+
+run-public: stop ensure-install check-env public-url
+	@echo ""
+	@echo "Press Ctrl+C to stop both."
+	@trap 'echo; echo Stopping...; kill 0 2>/dev/null; exit 0' INT TERM; \
+		(cd $(BE_DIR) && npm run start:dev) & \
+		(cd $(FE_DIR) && npm run dev) & \
+		wait
+
 run-be:
 	@cd $(BE_DIR) && npm run start:dev
 
@@ -81,3 +106,15 @@ stop:
 infosec-verify:
 	@chmod +x scripts/infosec-verify.sh
 	@./scripts/infosec-verify.sh
+
+tunnel-help:
+	@chmod +x scripts/cursor-tunnel-help.sh
+	@./scripts/cursor-tunnel-help.sh
+
+tunnel-cf:
+	@chmod +x scripts/start-cloudflared-tunnel.sh
+	@./scripts/start-cloudflared-tunnel.sh 3000
+
+run-tunnel-demo:
+	@chmod +x scripts/run-tunnel-demo.sh
+	@./scripts/run-tunnel-demo.sh 3000

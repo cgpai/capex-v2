@@ -23,6 +23,6 @@ export async function fetchDashboardSnapshotFromBackend(
   return postBackend<DashboardSnapshot>(
     '/dashboard/snapshot',
     { periodName: periodName.trim(), userId },
-    { source: 'dashboard.snapshot', timeoutMs: 12_000 },
+    { source: 'dashboard.snapshot', timeoutMs: 30_000 },
   );
 }

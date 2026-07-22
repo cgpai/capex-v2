@@ -10,9 +10,10 @@ function decodeExpUnsafe(token: string): number | null {
   try {
     const part = token.split('.')[1];
     if (!part) return null;
-    const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as {
-      exp?: number;
-    };
+    const padded = part + '='.repeat((4 - (part.length % 4)) % 4);
+    const payload = JSON.parse(
+      atob(padded.replace(/-/g, '+').replace(/_/g, '/')),
+    ) as { exp?: number };
     return typeof payload.exp === 'number' ? payload.exp : null;
   } catch {
     return null;
@@ -55,13 +56,21 @@ export function edgeSessionPermits(state: EdgeSessionState): boolean {
   return state === 'valid' || state === 'refreshable';
 }
 
-/** Data proxy (/api/be) requires verified access JWT — refresh cookie alone is not enough. */
+/** Data proxy (/api/be): allow refreshable — beProxy refreshes access server-side before forward. */
 export function edgeSessionPermitsBeProxy(state: EdgeSessionState): boolean {
-  return state === 'valid';
+  return state === 'valid' || state === 'refreshable';
 }
 
 export function clientIp(req: NextRequest): string {
+  const normalize = (ip: string) => {
+    const t = ip.trim();
+    return t.startsWith('::ffff:') ? t.slice(7) : t;
+  };
   const forwarded = req.headers.get('x-forwarded-for');
-  if (forwarded) return forwarded.split(',')[0]?.trim() || 'unknown';
-  return req.headers.get('x-real-ip')?.trim() || 'unknown';
+  if (forwarded) return normalize(forwarded.split(',')[0] ?? 'unknown');
+  const realIp = req.headers.get('x-real-ip');
+  if (realIp?.trim()) return normalize(realIp);
+  const reqIp = (req as NextRequest & { ip?: string | null }).ip;
+  if (reqIp?.trim()) return normalize(reqIp);
+  return 'unknown';
 }
