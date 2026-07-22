@@ -1,0 +1,41 @@
+# Local MCP config may contain Supabase PAT — do not commit
+.cursor/mcp.json
+
+# OS
+.DS_Store
+
+# Env secrets (all apps)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+!**/.env.example
+
+# Dependencies
+**/node_modules/
+
+# Build outputs
+**/.next/
+**/out/
+**/dist/
+**/build/
+**/.netlify/
+**/coverage/
+
+# Logs & debug
+**/*.log
+**/.pnpm-debug.log*
+
+# TypeScript
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+# Ops data — never commit credentials or user imports
+**/scripts/*.data.json
+**/scripts/*-users.json
+
+# IDE
+**/.idea/
+**/.vscode/*
+!**/.vscode/settings.json

@@ -1,0 +1,92 @@
+You are working on the frontend application using NextJS App Router.
+
+FRONTEND RESPONSIBILITIES:
+- UI rendering
+- form interaction
+- lightweight state
+- API communication only
+
+STRICT FRONTEND RULES:
+
+1. NEVER access database directly.
+2. NEVER place business logic in frontend.
+3. NEVER calculate summaries in frontend.
+4. NEVER filter large datasets in frontend.
+5. NEVER load all records simultaneously.
+6. NEVER duplicate API calls.
+7. NEVER create unnecessary rerenders.
+8. NEVER create unnecessary useEffect chains.
+9. NEVER create bloated components.
+10. NEVER store massive datasets in React state.
+
+REQUIRED STACK:
+- NextJS App Router
+- TanStack Query
+- Zustand
+- TanStack Table
+- React Hook Form
+- Zod validation
+
+PERFORMANCE RULES:
+
+1. Use Server Components whenever possible.
+2. Use Client Components only when necessary.
+3. Use dynamic imports for heavy components.
+4. Use Suspense boundaries properly.
+5. Use React.memo properly.
+6. Use useMemo properly.
+7. Use useCallback properly.
+8. Prevent unnecessary rerenders.
+9. Use lightweight reusable components.
+10. Split large components into smaller modules.
+11. Lazy-load charts and heavy widgets.
+12. Optimize bundle size aggressively.
+13. Avoid unnecessary state updates.
+14. Avoid deep prop drilling.
+15. Keep rendering lightweight and responsive.
+
+TABLE & CRUD RULES:
+
+1. ALWAYS use infinite scroll for large datasets.
+2. ALWAYS use virtualization for large tables.
+3. NEVER render thousands of rows directly.
+4. Use backend pagination only.
+5. Use backend filtering only.
+6. Use backend sorting only.
+7. Use backend searching only.
+8. Use optimistic CRUD updates.
+9. Avoid full-page reload after CRUD.
+10. Avoid full-table refetch after CRUD.
+11. Update affected rows only.
+12. Use skeleton loading.
+13. Use debounced search.
+14. Preserve scroll position.
+15. Keep scrolling smooth.
+
+API RULES:
+
+1. Use TanStack Query caching.
+2. Use staleTime properly.
+3. Use partial cache invalidation.
+4. Avoid unnecessary refetching.
+5. Prevent duplicate requests.
+6. Keep payloads lightweight.
+7. Optimize perceived loading speed.
+
+SECURITY RULES:
+
+1. Never expose secrets.
+2. Never expose sensitive tokens.
+3. Sanitize user inputs.
+4. Prevent XSS vulnerabilities.
+5. Use secure auth handling.
+6. Avoid insecure local storage usage.
+
+CODE QUALITY:
+
+1. Remove dead code.
+2. Remove unused imports.
+3. Remove duplicated hooks/services.
+4. Keep components modular.
+5. Keep code scalable.
+6. Keep code production-ready.

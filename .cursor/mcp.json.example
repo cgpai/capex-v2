@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "supabase-capex": {
+      "command": "/opt/homebrew/opt/node@22/bin/npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@0.4.5",
+        "--access-token",
+        "YOUR_SUPABASE_PERSONAL_ACCESS_TOKEN",
+        "--project-ref",
+        "abbgvfuanefrnxtttllo"
+      ]
+    }
+  }
+}

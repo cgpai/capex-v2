@@ -1,0 +1,42 @@
+{
+  "name": "capexapp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "verify:secure": "node scripts/verify-secure-production-build.mjs",
+    "verify:middleware": "node scripts/verify-middleware-security.mjs",
+    "build:secure": "npm run build && npm run verify:secure && npm run verify:middleware"
+  },
+  "dependencies": {
+    "@google/genai": "^1.30.0",
+    "@tanstack/query-sync-storage-persister": "^5.100.9",
+    "@tanstack/react-query": "^5.90.0",
+    "@tanstack/react-query-persist-client": "^5.100.9",
+    "@tanstack/react-virtual": "^3.14.3",
+    "jose": "^6.2.4",
+    "jspdf": "2.5.1",
+    "jspdf-autotable": "3.8.2",
+    "lucide-react": "^0.577.0",
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-dropzone": "14.2.3",
+    "recharts": "^3.8.0",
+    "xlsx": "0.18.5",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

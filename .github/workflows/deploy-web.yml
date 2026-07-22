@@ -1,0 +1,108 @@
+name: Deploy CAPEX Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'capex-apps/**'
+      - '.github/workflows/deploy-web.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  security:
+    name: Security gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: capex-apps
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: capex-apps/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dependency audit (report)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Middleware security audit
+        run: npm run verify:middleware
+
+      - name: Secure production build gate
+        env:
+          NEXT_PUBLIC_CAPEXBE_URL: https://capex-api.cgp-ai.com
+          NEXT_PUBLIC_USE_BACKEND_SESSION: 'true'
+          NEXT_PUBLIC_ALLOW_SUPABASE_FALLBACK: 'false'
+        run: npm run build:secure
+
+  deploy:
+    name: Build, push, deploy
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: capex-apps
+          push: true
+          tags: |
+            ghcr.io/cgpai/capex-web:latest
+            ghcr.io/cgpai/capex-web:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_CAPEXBE_URL=${{ secrets.NEXT_PUBLIC_CAPEXBE_URL }}
+            NEXT_PUBLIC_USE_BACKEND_SESSION=true
+            NEXT_PUBLIC_ALLOW_SUPABASE_FALLBACK=false
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            APP_DIR="/ops-agentic/workspaces/developer-aldryan/capex-deploy"
+            GHCR_USERNAME="cgpai"
+            GHCR_TOKEN="${{ secrets.GHCR_PAT }}"
+
+            if [ -z "$GHCR_TOKEN" ]; then
+              echo "GHCR_PAT is missing."
+              exit 1
+            fi
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+
+            cd "$APP_DIR"
+
+            if [ ! -f docker-compose.yml ] && [ ! -f compose.yml ]; then
+              echo "docker compose file not found in $APP_DIR"
+              exit 1
+            fi
+
+            docker compose pull capex-web
+            docker compose up -d --force-recreate --no-deps capex-web
+
+            docker image prune -f || true

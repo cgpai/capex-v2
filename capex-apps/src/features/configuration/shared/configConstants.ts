@@ -1,0 +1,5 @@
+export const USER_TABLE_PAGE_SIZE = 50;
+export const USER_TABLE_SCROLL_THRESHOLD_PX = 120;
+export const MAX_OFFICE_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_APP_ROLE_ID = 2_147_483_647;
+export const MAX_APP_USER_ID = 2_147_483_647;

@@ -1,0 +1,145 @@
+name: Deploy CAPEX API
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'capexbe/**'
+      - '.github/workflows/deploy-api.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: capex-api-deploy
+  cancel-in-progress: true
+
+jobs:
+  security:
+    name: Security gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: capexbe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: capexbe/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dependency audit (report)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Query safety audit
+        run: npm run verify:query-safety
+
+      - name: Build
+        run: npm run build
+
+      - name: PostgREST filter unit tests
+        run: npm test -- --testPathPatterns=postgrest-filter
+
+  deploy:
+    name: Build, push, deploy
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push CAPEX API image
+        uses: docker/build-push-action@v6
+        with:
+          context: capexbe
+          push: true
+          tags: |
+            ghcr.io/cgpai/capex-api:latest
+            ghcr.io/cgpai/capex-api:${{ github.sha }}
+
+      - name: Deploy CAPEX API to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ubuntu
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            APP_DIR="${{ secrets.DEPLOY_PATH }}"
+            GHCR_USERNAME="${{ secrets.GHCR_USERNAME }}"
+            GHCR_TOKEN="${{ secrets.GHCR_TOKEN }}"
+
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="/ops-agentic/workspaces/developer-aldryan/capex-deploy"
+            fi
+
+            if [ -z "$GHCR_USERNAME" ]; then
+              GHCR_USERNAME="${{ github.actor }}"
+            fi
+
+            if [ -z "$GHCR_TOKEN" ]; then
+              echo "GHCR_TOKEN is missing."
+              exit 1
+            fi
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+
+            cd "$APP_DIR"
+
+            echo "Removing local override if exists..."
+            sudo rm -f docker-compose.override.yml || true
+
+            echo "Pulling latest CAPEX API image..."
+            docker compose pull capex-api
+
+            echo "Recreating CAPEX API container..."
+            docker compose up -d --force-recreate --no-deps capex-api
+
+            echo "Waiting for capex-api to boot..."
+            sleep 10
+
+            echo "Container status:"
+            docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" | grep -Ei "capex-api|NAMES"
+
+            if ! docker ps --format "{{.Names}} {{.Status}}" | grep "capex-api" | grep -q "Up"; then
+              echo "capex-api is not running."
+              docker logs --tail=150 capex-api || true
+              exit 1
+            fi
+
+            echo "Running local smoke test..."
+            curl -fsS http://127.0.0.1:8082/ || {
+              echo "capex-api smoke test failed."
+              docker logs --tail=150 capex-api || true
+              exit 1
+            }
+
+            echo "Running public smoke test..."
+            curl -fsS https://capex-api.cgp-ai.com/ || {
+              echo "Public CAPEX API smoke test failed."
+              docker logs --tail=150 capex-api || true
+              exit 1
+            }
+
+            echo "CAPEX API deployed successfully."
+
+            docker image prune -af || true

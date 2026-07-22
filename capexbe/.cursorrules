@@ -1,0 +1,129 @@
+You are working on the NestJS backend application.
+
+Backend is the central data processing layer.
+
+BACKEND RESPONSIBILITIES:
+- business logic
+- filtering
+- sorting
+- pagination
+- aggregation
+- workflow
+- approval flow
+- permissions
+- dashboard summaries
+- caching
+- security
+
+ARCHITECTURE RULES:
+
+1. Use modular clean architecture.
+2. Keep controllers thin.
+3. Place business logic inside services only.
+4. Use repository/service pattern.
+5. Use DTO validation everywhere.
+6. Keep APIs lightweight and optimized.
+7. Avoid duplicated logic.
+8. Never place heavy logic in controllers.
+
+PERFORMANCE RULES:
+
+1. Optimize all database queries.
+2. Prevent N+1 query problems.
+3. Use pagination everywhere.
+4. Use cursor pagination for large datasets.
+5. Use optimized select queries only.
+6. Never return full database entities.
+7. Return lightweight DTO responses only.
+8. Use Redis caching.
+9. Cache dashboard APIs.
+10. Cache executive summary APIs.
+11. Use response compression.
+12. Minimize payload sizes aggressively.
+13. Optimize joins and relations.
+14. Prevent duplicate queries.
+15. Keep API latency minimal.
+16. Ensure fast CRUD operations.
+
+DATABASE RULES:
+
+1. Add indexes for:
+   - foreign keys
+   - search columns
+   - sorting columns
+   - status columns
+   - created_at
+2. Prevent full table scans.
+3. Optimize execution plans.
+4. Use transactions safely.
+5. Use soft delete architecture.
+6. Prevent slow joins.
+7. Optimize relation loading.
+
+CRUD RULES:
+
+1. Use optimistic-friendly responses.
+2. Avoid full refetch after CRUD.
+3. Return updated records only.
+4. Prevent race conditions.
+5. Prevent duplicate submissions.
+6. Use partial updates.
+7. Keep CRUD lightweight and responsive.
+
+AUTHENTICATION & SECURITY:
+
+1. Use JWT authentication.
+2. Use access token + refresh token.
+3. Use refresh token rotation.
+4. Use RBAC authorization.
+5. Use role guards and permission guards.
+6. Use bcrypt or argon2 hashing.
+7. Add login audit logs.
+8. Add brute force protection.
+9. Add rate limiting.
+10. Add Helmet middleware.
+11. Add secure CORS whitelist.
+12. Validate all DTOs strictly.
+13. Sanitize all inputs.
+14. Prevent:
+   - SQL injection
+   - XSS
+   - CSRF
+   - privilege escalation
+15. Protect environment variables.
+16. Remove hardcoded secrets.
+17. Never expose internal server errors.
+
+API RULES:
+
+1. Standardize all API responses:
+
+{
+  success: true,
+  message: "",
+  data: {},
+  meta: {
+    page,
+    limit,
+    total
+  }
+}
+
+2. Support:
+   - pagination
+   - search
+   - sorting
+   - filtering
+
+3. Keep responses lightweight.
+4. Optimize API batching.
+5. Prevent overfetching.
+
+CODE QUALITY:
+
+1. Remove dead code.
+2. Remove duplicated services.
+3. Remove unused dependencies.
+4. Maintain modular architecture.
+5. Use TypeScript strict mode.
+6. Keep code production-ready.
