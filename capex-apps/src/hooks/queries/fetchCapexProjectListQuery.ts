@@ -6,7 +6,7 @@ export type { ProjectListQueryParams, ProjectListQueryResult };
 
 const QUERY_REQUEST_TTL_MS = 5 * 60 * 1000;
 /** Bump when server-side list read policy changes (invalidates stale table disk cache). */
-const PROJECT_LIST_SCOPE_CACHE_REVISION = 'v7-server-filter-authoritative';
+const PROJECT_LIST_SCOPE_CACHE_REVISION = 'v8-slim-wire-payload';
 
 /** Server-side table fetch with in-flight dedupe (disk write di halaman / prefetch). */
 export async function fetchCapexProjectListQuery(

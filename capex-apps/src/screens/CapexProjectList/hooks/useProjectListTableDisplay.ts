@@ -12,6 +12,8 @@ export type ProjectListTableDisplayInput = {
   allowPreloadRows?: boolean;
   /** Defer visible rows only during active search/filter transitions (not client pool path). */
   deferTableRows?: boolean;
+  /** Hide stale rows while server fetches another page. */
+  isPageTransition?: boolean;
 };
 
 export type ProjectListTableDisplay = {
@@ -34,13 +36,22 @@ export function useProjectListTableDisplay({
   listTotalAssetCount,
   allowPreloadRows = false,
   deferTableRows = false,
+  isPageTransition = false,
 }: ProjectListTableDisplayInput): ProjectListTableDisplay {
   const paginatedAssets = useMemo(() => {
+    if (isPageTransition) return [];
     if (useClientFilteredDisplay && clientFilteredPage) return clientFilteredPage.assets;
     if (serverTableReady) return allAssets;
     if (allowPreloadRows && allAssets.length > 0) return allAssets;
     return [];
-  }, [useClientFilteredDisplay, clientFilteredPage, serverTableReady, allowPreloadRows, allAssets]);
+  }, [
+    isPageTransition,
+    useClientFilteredDisplay,
+    clientFilteredPage,
+    serverTableReady,
+    allowPreloadRows,
+    allAssets,
+  ]);
 
   const deferredTableAssets = useDeferredValue(paginatedAssets);
   const tableAssets = deferTableRows ? deferredTableAssets : paginatedAssets;

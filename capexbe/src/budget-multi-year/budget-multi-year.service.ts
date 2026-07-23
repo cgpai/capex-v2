@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { AuthContextService } from '../auth/auth-context.service';
 import { AuthZService } from '../auth/auth-z.service';
-import { fetchAllRecords, fetchRecordsInBatches, toCamelCase } from '../project-list/supabase-helpers';
+import { fetchAllRecords, toCamelCase } from '../project-list/supabase-helpers';
 import {
   perfCacheDelete,
   perfCacheDeleteByPrefix,
@@ -11,9 +11,11 @@ import {
 } from '../shared/perf-cache';
 import { CACHE_TTL_MS, cacheKeys } from '../shared/cache-keys';
 import {
-  buildMultiYearsFromRows,
+  buildMultiYearsShellFromRows,
   loadPeriodCategoryBudgetsForMultiYear,
 } from './budget-multi-year.util';
+
+const MULTI_YEAR_SHELL_COLUMNS = 'name, start_year, end_year, budget_plan';
 
 const BUDGET_HIERARCHY = 'Budget';
 const CATEGORY_SELECT = 'id, name, is_active';
@@ -87,28 +89,15 @@ export class BudgetMultiYearService {
     await perfCacheDeleteByPrefix(`app:table:budget-multi-year:period-budgets:${userId}:`);
   }
 
+  /** Shell: multi-year + kategori aktif saja — detail periode via period-budgets on expand. */
   private async loadPageBundleFromDb(client: SupabaseClient) {
-    const [multiYearRows, periodRows, categories] = await Promise.all([
-      fetchAllRecords(client, 'budget_multi_years', '*'),
-      fetchAllRecords(client, 'budget_periods', 'period_name, multi_year_name, start_date, end_date'),
+    const [multiYearRows, categories] = await Promise.all([
+      fetchAllRecords(client, 'budget_multi_years', MULTI_YEAR_SHELL_COLUMNS),
       getActiveBudgetCategories(client),
     ]);
 
-    const periodNames = (periodRows ?? [])
-      .map((p) => String(p.period_name ?? ''))
-      .filter(Boolean);
-    const categoryBudgets = periodNames.length
-      ? await fetchRecordsInBatches(
-          client,
-          'budget_period_category_budgets',
-          'period_name',
-          periodNames,
-          'period_name, budget_category_id, budget_plan, budget_carry_forward, budget_allocated, approved_budget, consumed_budget',
-        )
-      : [];
-
     return {
-      multiYears: buildMultiYearsFromRows(multiYearRows, periodRows, categoryBudgets),
+      multiYears: buildMultiYearsShellFromRows(multiYearRows),
       categories,
     };
   }
@@ -356,6 +345,8 @@ export class BudgetMultiYearService {
 
     await this.invalidateUserCaches(userId);
     await perfCacheDelete(cacheKeys.budgetHuPeriod(userId, pn));
+    await perfCacheDelete(cacheKeys.budgetHuPeriodNetwork(userId, pn));
+    await perfCacheDelete(cacheKeys.budgetHuPeriodStructure(userId, pn));
     await perfCacheDeleteByPrefix(`app:table:budget-hu:page:${userId}:${pn.toLowerCase()}`);
     await perfCacheDeleteByPrefix(`app:table:budget-hu:asset-counts:${userId}:${pn.toLowerCase()}`);
 
@@ -418,6 +409,8 @@ export class BudgetMultiYearService {
 
     await this.invalidateUserCaches(userId);
     await perfCacheDelete(cacheKeys.budgetHuPeriod(userId, pn));
+    await perfCacheDelete(cacheKeys.budgetHuPeriodNetwork(userId, pn));
+    await perfCacheDelete(cacheKeys.budgetHuPeriodStructure(userId, pn));
     await perfCacheDeleteByPrefix(`app:table:budget-hu:page:${userId}:${pn.toLowerCase()}`);
     await perfCacheDeleteByPrefix(`app:table:budget-hu:asset-counts:${userId}:${pn.toLowerCase()}`);
 

@@ -118,7 +118,7 @@ async function fetchPageBundleFromNetwork(
 }
 
 /**
- * Muat multi-year + kategori — seed cache dulu (<50ms), network di background bila seed lengkap.
+ * Muat multi-year + kategori — seed cache dulu (<50ms), network hanya bila seed belum lengkap.
  */
 export async function fetchBudgetMultiYearPageBundle(
   queryClient?: QueryClient,
@@ -126,14 +126,8 @@ export async function fetchBudgetMultiYearPageBundle(
   const userId = await resolveBootstrapUserId(queryClient);
   const seed = buildBudgetMultiYearPageSeedFromCache(queryClient, userId);
 
-  if (seed.multiYears.length) {
-    if (userId != null) {
-      void fetchPageBundleFromNetwork(queryClient, userId).then((fresh) => {
-        if (!fresh?.multiYears.length || !queryClient) return;
-        queryClient.setQueryData(queryKeys.budgetMultiYear.page(userId), fresh);
-      });
-    }
-    if (seed.categories.length) return seed;
+  if (seed.multiYears.length && seed.categories.length) {
+    return seed;
   }
 
   const cacheKey = userId != null ? `budget-multi-year:page:${userId}` : 'budget-multi-year:page:anon';

@@ -24,7 +24,7 @@ import { BudgetSummary } from '../components/organisms/BudgetSummary/BudgetSumma
 import { BudgetSummaryCard } from '../components/molecules/BudgetSummaryCard/BudgetSummaryCard';
 import { EditPlanModal } from '../components/organisms/EditPlanModal/EditPlanModal';
 import { queryKeys } from '../lib/query-keys';
-import { fetchBudgetSiloamPeriodBundle } from '../hooks/queries/fetchBudgetSiloamPeriod';
+import { fetchBudgetSiloamFullNetworkBundle } from '../hooks/queries/fetchBudgetSiloamPeriod';
 import { cloneDeep } from '../lib/clone';
 import { invalidateRequestCache } from '../lib/requestCache';
 import { invalidateBudgetHuBackendCache } from '../services/budgetHuPageApi';
@@ -110,7 +110,7 @@ const BudgetArchetypePageInner: React.FC<BudgetArchetypePageProps> = ({
 
   const periodQuery = useQuery({
     queryKey: queryKeys.budgetSiloamPeriod.detail(periodName),
-    queryFn: () => fetchBudgetSiloamPeriodBundle(periodName, currentUser.id),
+    queryFn: () => fetchBudgetSiloamFullNetworkBundle(periodName, currentUser.id),
     enabled: !!periodName.trim() && canView && !!currentUser?.id,
     staleTime: STALE_MS,
     gcTime: GC_MS,
@@ -342,7 +342,7 @@ const BudgetArchetypePageInner: React.FC<BudgetArchetypePageProps> = ({
       invalidateRequestCache('budget-siloam:');
       await invalidateBudgetHuBackendCache(periodName, currentUser.id);
 
-      const fresh = await fetchBudgetSiloamPeriodBundle(periodName, currentUser.id, {
+      const fresh = await fetchBudgetSiloamFullNetworkBundle(periodName, currentUser.id, {
         skipCache: true,
       });
       const confirmed = fresh.budgetPeriod

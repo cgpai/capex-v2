@@ -1,6 +1,47 @@
 import { fetchRecordsInBatches, toCamelCase } from '../project-list/supabase-helpers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+const EMPTY_BUDGET_METRICS = {
+  budgetCarryForward: 0,
+  budgetAllocated: 0,
+  approvedBudget: 0,
+  consumedBudget: 0,
+  assetCount: 0,
+  noBudgetAssetCount: 0,
+};
+
+/** Ringkasan multi-year tanpa agregat periode — agregat di-load saat baris di-expand. */
+export function buildMultiYearsShellFromRows(multiYearRows: any[]): any[] {
+  if (!multiYearRows?.length) return [];
+  return multiYearRows.map((item) => {
+    const camelItem = toCamelCase(item) as Record<string, unknown>;
+    return {
+      name: camelItem.name,
+      startYear: camelItem.startYear,
+      endYear: camelItem.endYear,
+      budget: {
+        budgetPlan: Number(camelItem.budgetPlan || 0),
+        ...EMPTY_BUDGET_METRICS,
+      },
+    };
+  });
+}
+
+export function buildPeriodSummariesFromRows(periodRows: any[]): any[] {
+  if (!periodRows?.length) return [];
+  return periodRows.map((period) => {
+    const camel = toCamelCase(period) as Record<string, unknown>;
+    return {
+      periodName: String(camel.periodName ?? ''),
+      multiYearName: String(camel.multiYearName ?? ''),
+      startDate: String(camel.startDate ?? ''),
+      endDate: String(camel.endDate ?? ''),
+      budget: {},
+      archetypes: [],
+    };
+  });
+}
+
 export function buildMultiYearsFromRows(
   multiYearRows: any[],
   allPeriods: any[],

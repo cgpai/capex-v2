@@ -6,6 +6,25 @@ import type { Column } from '@/components/organisms/GenericTable/GenericTable';
 import { GenericTable } from '@/components/organisms/GenericTable/GenericTable';
 import { CapexProjectListMobileAssetList } from './CapexProjectListMobileAssetList';
 
+function TableSkeletonRows({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="absolute inset-0 z-[5] flex flex-col gap-0 bg-siloam-surface/90 px-4 py-3 pointer-events-none">
+      {Array.from({ length: rows }, (_, i) => (
+        <div
+          key={i}
+          className="flex gap-4 border-b border-siloam-border/60 py-3 animate-pulse"
+          aria-hidden
+        >
+          <div className="h-4 w-24 rounded bg-siloam-border/80" />
+          <div className="h-4 flex-1 max-w-[140px] rounded bg-siloam-border/60" />
+          <div className="h-4 flex-1 max-w-[180px] rounded bg-siloam-border/60" />
+          <div className="h-4 w-16 rounded bg-siloam-border/50" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export type CapexProjectListTableBlockProps = {
   columns: Column<EnrichedAsset>[];
   paginatedAssets: EnrichedAsset[];
@@ -16,6 +35,7 @@ export type CapexProjectListTableBlockProps = {
   isFilterRefreshing: boolean;
   isSearchActive: boolean;
   isBackgroundRefresh: boolean;
+  isPageTransition: boolean;
   hasActiveFilters: boolean;
   footerTotalCount: number;
   currentPage: number;
@@ -37,6 +57,7 @@ function CapexProjectListTableBlockInner({
   isFilterRefreshing,
   isSearchActive,
   isBackgroundRefresh,
+  isPageTransition,
   hasActiveFilters,
   footerTotalCount,
   currentPage,
@@ -47,11 +68,17 @@ function CapexProjectListTableBlockInner({
   onPageChange,
   onItemsPerPageChange,
 }: CapexProjectListTableBlockProps) {
+  const paginationBusy = isPageTransition || showInitialLoading;
+  const showPagination = footerTotalCount > itemsPerPage;
+  const tableDimmed = isPageTransition;
+
   return (
     <div data-tour="cpl-asset-table" className="flex-1 overflow-hidden flex flex-col relative">
       {showInitialLoading ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-siloam-surface/80">
-          <p className="text-sm font-medium text-siloam-text-secondary">Memuat daftar proyek…</p>
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center bg-siloam-surface/90 py-2">
+          <p className="text-sm font-medium text-siloam-text-secondary">
+            {isPageTransition ? `Memuat halaman ${currentPage}…` : 'Memuat daftar proyek…'}
+          </p>
         </div>
       ) : null}
       {isFilterRefreshing ? (
@@ -75,7 +102,12 @@ function CapexProjectListTableBlockInner({
         </>
       ) : null}
 
-      <div className="hidden md:block flex-1 overflow-hidden">
+      <div
+        className={`hidden md:block flex-1 overflow-hidden relative transition-opacity duration-200 ${
+          tableDimmed ? 'opacity-45 pointer-events-none' : 'opacity-100'
+        }`}
+      >
+        {showInitialLoading ? <TableSkeletonRows /> : null}
         <GenericTable
           columns={columns}
           data={paginatedAssets}
@@ -88,7 +120,12 @@ function CapexProjectListTableBlockInner({
         />
       </div>
 
-      <div className="block md:hidden flex-1 overflow-hidden p-4">
+      <div
+        className={`block md:hidden flex-1 overflow-hidden p-4 relative transition-opacity duration-200 ${
+          tableDimmed ? 'opacity-45 pointer-events-none' : 'opacity-100'
+        }`}
+      >
+        {showInitialLoading ? <TableSkeletonRows rows={6} /> : null}
         <CapexProjectListMobileAssetList
           assets={paginatedAssets}
           selectedAssetId={selectedAssetId}
@@ -108,7 +145,7 @@ function CapexProjectListTableBlockInner({
             type="button"
             data-tour="cpl-export"
             onClick={onExportExcel}
-            disabled={footerTotalCount === 0 || isExporting}
+            disabled={footerTotalCount === 0 || isExporting || paginationBusy}
             className="px-3 py-1.5 bg-emerald-600 text-white rounded-md text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
             title={
               footerTotalCount > 0
@@ -126,7 +163,8 @@ function CapexProjectListTableBlockInner({
             <select
               value={itemsPerPage}
               onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
-              className="px-2 py-1 border border-siloam-border rounded bg-siloam-bg text-sm focus:outline-none focus:ring-2 focus:ring-siloam-blue"
+              disabled={paginationBusy}
+              className="px-2 py-1 border border-siloam-border rounded bg-siloam-bg text-sm focus:outline-none focus:ring-2 focus:ring-siloam-blue disabled:opacity-50"
             >
               <option value={20}>20</option>
               <option value={25}>25</option>
@@ -136,13 +174,17 @@ function CapexProjectListTableBlockInner({
             </select>
           </div>
 
-          {totalPages > 1 ? (
+          {showPagination ? (
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border border-siloam-border rounded bg-siloam-bg hover:bg-siloam-surface disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                disabled={currentPage === 1 || paginationBusy}
+                className={`px-3 py-1 border border-siloam-border rounded bg-siloam-bg text-sm transition disabled:cursor-not-allowed ${
+                  currentPage === 1 || paginationBusy
+                    ? 'opacity-40'
+                    : 'opacity-100 hover:bg-siloam-surface'
+                }`}
               >
                 Previous
               </button>
@@ -158,15 +200,20 @@ function CapexProjectListTableBlockInner({
                   } else {
                     pageNum = currentPage - 2 + i;
                   }
+                  const isCurrent = currentPage === pageNum;
+                  const isAdjacent = Math.abs(pageNum - currentPage) === 1;
                   return (
                     <button
                       key={pageNum}
                       type="button"
                       onClick={() => onPageChange(pageNum)}
-                      className={`px-3 py-1 border rounded text-sm ${
-                        currentPage === pageNum
-                          ? 'bg-siloam-blue text-white border-siloam-blue'
-                          : 'border-siloam-border bg-siloam-bg hover:bg-siloam-surface'
+                      disabled={paginationBusy}
+                      className={`px-3 py-1 border rounded text-sm transition disabled:cursor-not-allowed ${
+                        isCurrent
+                          ? 'bg-siloam-blue text-white border-siloam-blue opacity-100'
+                          : isAdjacent
+                            ? 'border-siloam-border bg-siloam-bg opacity-60 hover:bg-siloam-surface hover:opacity-100'
+                            : 'border-siloam-border bg-siloam-bg opacity-40 hover:bg-siloam-surface hover:opacity-70'
                       }`}
                     >
                       {pageNum}
@@ -177,8 +224,12 @@ function CapexProjectListTableBlockInner({
               <button
                 type="button"
                 onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 border border-siloam-border rounded bg-siloam-bg hover:bg-siloam-surface disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                disabled={currentPage === totalPages || paginationBusy}
+                className={`px-3 py-1 border border-siloam-border rounded bg-siloam-bg text-sm transition disabled:cursor-not-allowed ${
+                  currentPage === totalPages || paginationBusy
+                    ? 'opacity-40'
+                    : 'opacity-100 hover:bg-siloam-surface'
+                }`}
               >
                 Next
               </button>

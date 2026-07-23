@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+/**
+ * CAPEX dev runner — ./run works on Mac, Linux, and Windows PowerShell 7+.
+ * Fallback: run.cmd / run.ps1 / npm run dev
+ */
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+const sub = args.length ? args : ['run'];
+
+const result = spawnSync(process.execPath, [join(root, 'scripts/dev.mjs'), ...sub], {
+  stdio: 'inherit',
+  cwd: root,
+  shell: process.platform === 'win32',
+});
+
+process.exit(result.status ?? 1);

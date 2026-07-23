@@ -32,6 +32,7 @@ import {
   prefetchBudgetHuPage,
 } from '../../hooks/queries/warmBudgetHuCache';
 import {
+  countHuProjects,
   hasBudgetHuPageOnDisk,
   isBudgetPeriodLikelyPartial,
   readBudgetHuConfigCacheAnyAge,
@@ -51,7 +52,7 @@ function normalizeBudgetPeriodTree(period: BudgetPeriod): BudgetPeriod {
 }
 
 /** Peer sync via backend stamp — keep light; only soft-refetch on real change. */
-const HU_SYNC_POLL_MS = 4000;
+const HU_SYNC_POLL_MS = 8_000;
 const STALE_MS = 5 * 60 * 1000;
 const CONFIG_STALE_MS = 30 * 60 * 1000;
 const GC_MS = 1000 * 60 * 30;
@@ -218,6 +219,15 @@ export function useBudgetHuPagePipeline({
 
   const mayUseDiskSeed = Boolean(diskPageSeed?.budgetPeriod) && !likelyPartialDiskCache;
 
+  /** Disk cache is period-wide — only reuse as query seed when this HU already has projects. */
+  const diskSeedHasCurrentHuProjects = useMemo(
+    () => countHuProjects(diskPageSeed?.budgetPeriod, huId) > 0,
+    [diskPageSeed?.budgetPeriod, huId],
+  );
+
+  const useDiskSeedForHuQuery =
+    mayUseDiskSeed && (!huId?.trim() || diskSeedHasCurrentHuProjects);
+
   const applyPageBundle = useCallback(
     (bundle: BudgetHuPageBundle | BudgetHuRemoteBundle) => {
       if (
@@ -290,10 +300,14 @@ export function useBudgetHuPagePipeline({
       hydrationContextRef.current = contextKey;
     }
 
-    // Prefer instant disk hydrate; only prefetch network when no usable disk seed.
-    hydrateBudgetHuPageFromDisk(queryClient, periodName, userId);
-    if (!mayUseDiskSeed || likelyPartialDiskCache) {
-      void prefetchBudgetHuPage(queryClient, periodName, userId);
+    // Prefer instant disk hydrate for this HU; prefetch network when cache is cold.
+    hydrateBudgetHuPageFromDisk(queryClient, periodName, userId, {
+      hospitalUnitId: huId ?? undefined,
+    });
+    if (!useDiskSeedForHuQuery || likelyPartialDiskCache) {
+      void prefetchBudgetHuPage(queryClient, periodName, userId, {
+        hospitalUnitId: huId ?? undefined,
+      });
     }
 
     const shouldSeedLocal =
@@ -317,7 +331,11 @@ export function useBudgetHuPagePipeline({
       }
     }
 
-    if (diskPageSeed && (periodChanged || !lastAppliedBundleRef.current)) {
+    if (
+      diskPageSeed &&
+      (periodChanged || !lastAppliedBundleRef.current) &&
+      useDiskSeedForHuQuery
+    ) {
       applyPageBundle(diskPageSeed);
     }
   }, [
@@ -330,9 +348,23 @@ export function useBudgetHuPagePipeline({
     applyPageBundle,
     currentBudgetPeriod,
     preloadedBudgetHuPage,
-    mayUseDiskSeed,
+    useDiskSeedForHuQuery,
     likelyPartialDiskCache,
   ]);
+
+  const warmHuSeed = useMemo((): BudgetHuRemoteBundle | undefined => {
+    if (!huId?.trim() || !periodName.trim()) return undefined;
+    const cached = queryClient.getQueryData<BudgetHuRemoteBundle>(
+      queryKeys.budgetHu.page(periodName, userId, huId),
+    );
+    if (cached?.budgetPeriod && countHuProjects(cached.budgetPeriod, huId) > 0) {
+      return cached;
+    }
+    if (useDiskSeedForHuQuery && diskPageSeed) return diskPageSeed as BudgetHuRemoteBundle;
+    return undefined;
+  }, [queryClient, periodName, userId, huId, useDiskSeedForHuQuery, diskPageSeed]);
+
+  const hasWarmHuCache = Boolean(warmHuSeed);
 
   const huRemoteQuery = useQuery({
     queryKey: queryKeys.budgetHu.page(periodName, userId, huId),
@@ -343,14 +375,13 @@ export function useBudgetHuPagePipeline({
         omitConfig: true,
       }),
     enabled: !!periodName.trim() && canView && !!huId?.trim(),
-    staleTime: likelyPartialDiskCache ? 0 : STALE_MS,
+    staleTime: hasWarmHuCache || diskSeedHasCurrentHuProjects ? STALE_MS : 0,
     gcTime: GC_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    // Disk seed: paint immediately; stamp poll reconciles only when server fingerprint differs.
-    refetchOnMount: likelyPartialDiskCache || !mayUseDiskSeed ? 'always' : false,
-    initialData: mayUseDiskSeed ? diskPageSeed : undefined,
-    placeholderData: (prev) => prev ?? diskPageSeed,
+    refetchOnMount: hasWarmHuCache ? false : likelyPartialDiskCache || !useDiskSeedForHuQuery ? 'always' : false,
+    initialData: warmHuSeed,
+    placeholderData: (prev) => prev ?? warmHuSeed,
   });
 
   const configQuery = useQuery({
@@ -442,12 +473,31 @@ export function useBudgetHuPagePipeline({
     !!diskPageSeed?.budgetPeriod ||
     !!remoteBundle?.budgetPeriod;
 
-  const isInitialLoad = huRemoteQuery.isPending && !hasListData && !hasPageOnDisk;
+  const currentHuProjectCount = countHuProjects(editedData ?? displayPeriod, huId);
 
-  const bootstrapReady =
-    !isInitialLoad && (huRemoteQuery.isSuccess || huRemoteQuery.isError);
+  const hasHuShell = useMemo(() => {
+    if (!huId?.trim() || !displayPeriod) return false;
+    return displayPeriod.archetypes.some((arch) =>
+      arch.units.some((unit) => unit.id === huId),
+    );
+  }, [displayPeriod, huId]);
+
+  const isInitialLoad =
+    !!huId?.trim() &&
+    huRemoteQuery.isPending &&
+    !huRemoteQuery.data &&
+    !hasWarmHuCache &&
+    currentHuProjectCount === 0 &&
+    !hasHuShell &&
+    !huRemoteQuery.isError;
+
+  const huQuerySettled =
+    !huId?.trim() || huRemoteQuery.isSuccess || huRemoteQuery.isError;
+
+  const bootstrapReady = !isInitialLoad && huQuerySettled;
 
   const isBackgroundRefresh =
+    !isInitialLoad &&
     hasListData &&
     (huRemoteQuery.isFetching || configQuery.isFetching) &&
     !huRemoteQuery.isPending;

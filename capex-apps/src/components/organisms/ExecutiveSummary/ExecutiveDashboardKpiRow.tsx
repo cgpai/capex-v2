@@ -35,7 +35,7 @@ export const ExecutiveDashboardKpiRow = memo(function ExecutiveDashboardKpiRow({
   const totalBudget = summary.totalBudget;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <ExecutiveSummaryStatCard
         title="Total Budget"
         value={formatBudgetView(summary.totalBudget)}
@@ -101,7 +101,7 @@ const UtilizationCard = memo(function UtilizationCard({ utilizationPct }: { util
 
   return (
     <div
-      className="bg-siloam-surface rounded-xl shadow-soft overflow-hidden flex flex-col h-full border-t-4"
+      className="bg-siloam-surface rounded-xl shadow-soft overflow-hidden flex flex-col h-full min-h-[140px] border-t-4"
       style={{ borderColor: EXECUTIVE_SUMMARY_COLORS.primary }}
     >
       <div className="p-4 flex items-center gap-4 flex-1">

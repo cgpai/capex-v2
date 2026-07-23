@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createHash } from 'crypto';
 import type { ProjectListQueryBody } from './project-list.dto';
 import {
   applyAllProjectListFilters,
+  applyProjectListAssetFilters,
+  applyProjectListBudgetFilters,
   assetCountSelect,
   assetIdScanSelect,
   assetListSelect,
@@ -12,9 +15,11 @@ import {
   resolveAuthoritativeProjectListScope,
   resolveSearchAssetIdsForList,
   resolveSearchProjectIdsForList,
+  resolveFullSearchMatchingAssetIds,
   loadAssetTypeGroupMasterMaps,
   resolveAssetTypeGroupFilterIds,
 } from './project-list-query.util';
+import { sanitizePostgrestIdList } from '../shared/postgrest-filter.util';
 import {
   enrichAssetRowsFromJoinedSelect,
   enrichRawAssetRowsWithMaster,
@@ -30,10 +35,14 @@ import {
   groupStatusesByAsset,
 } from './progress-aggregate';
 import {
+  buildBddAssetSqlOrFilter,
   isBddConstructionAsset,
   isUnassignedBddPriority,
+  resolveBddConstructionAssetTypeIds,
 } from './bdd-construction.util';
 import { isAssetCodeSortAscending, sortRowsByAssetCode } from './project-list-sort.util';
+import { CACHE_TTL_MS, cacheKeys } from '../shared/cache-keys';
+import { perfCacheGet, perfCacheSet } from '../shared/perf-cache';
 
 export type ProjectListQueryDebugCounts = {
   dataPolicy: string;
@@ -52,6 +61,10 @@ const ID_SCAN_BATCH = 2000;
 
 function needsBddFilter(query: ProjectListQueryBody): boolean {
   return Boolean(query.bddConstructionOnly || query.hideUnassignedBdd);
+}
+
+function needsSearchPaginationPath(query: ProjectListQueryBody): boolean {
+  return query.search.trim().length > 0;
 }
 
 function needsProgressFilter(query: ProjectListQueryBody): boolean {
@@ -88,55 +101,38 @@ type AssetIdScanRow = {
   bddPriority?: string | null;
 };
 
-async function loadAssetTypeGroupNameByTypeId(
-  client: SupabaseClient,
-): Promise<Map<string, string>> {
-  const [{ data: groups, error: gErr }, { data: types, error: tErr }] = await Promise.all([
-    client.from('asset_type_groups').select('id, name'),
-    client.from('asset_type_configs').select('id, group_id'),
-  ]);
-  if (gErr) throw new Error(`asset_type_groups: ${gErr.message}`);
-  if (tErr) throw new Error(`asset_type_configs: ${tErr.message}`);
-  const groupNameById = new Map(
-    (groups || []).map((g: { id: string; name: string }) => [String(g.id), String(g.name)] as [string, string]),
-  );
-  const out = new Map<string, string>();
-  for (const row of types || []) {
-    const typeId = String((row as { id: string }).id);
-    const groupId = String((row as { group_id: string }).group_id || '');
-    const groupName = groupNameById.get(groupId);
-    if (groupName) out.set(typeId, groupName);
-  }
-  return out;
+function bddScanCacheHash(query: ProjectListQueryBody): string {
+  const { page: _p, pageSize: _s, skipCache: _c, exportAll: _e, ...rest } = query;
+  return createHash('sha256').update(JSON.stringify(rest)).digest('hex').slice(0, 16);
 }
 
 async function filterScanRowsForBdd(
   client: SupabaseClient,
   scanRows: AssetIdScanRow[],
   query: ProjectListQueryBody,
+  groupNameByTypeId: Map<string, string>,
 ): Promise<AssetIdScanRow[]> {
   if (scanRows.length === 0) return scanRows;
 
-  const projectIds = [
-    ...new Set(
-      scanRows
-        .map((r) => String(r.project_id || r.projectId || ''))
-        .filter(Boolean),
-    ),
-  ];
+  const needsProjectNames = query.bddConstructionOnly;
   const projectNameById = new Map<string, string>();
-  for (let i = 0; i < projectIds.length; i += 150) {
-    const chunk = projectIds.slice(i, i + 150);
-    const { data, error } = await client.from('projects').select('id, project_name').in('id', chunk);
-    if (error) throw new Error(`bdd projects: ${error.message}`);
-    for (const row of data || []) {
-      projectNameById.set(String((row as { id: string }).id), String((row as { project_name: string }).project_name || ''));
+  if (needsProjectNames) {
+    const projectIds = [
+      ...new Set(
+        scanRows
+          .map((r) => String(r.project_id || r.projectId || ''))
+          .filter(Boolean),
+      ),
+    ];
+    for (let i = 0; i < projectIds.length; i += 150) {
+      const chunk = projectIds.slice(i, i + 150);
+      const { data, error } = await client.from('projects').select('id, project_name').in('id', chunk);
+      if (error) throw new Error(`bdd projects: ${error.message}`);
+      for (const row of data || []) {
+        projectNameById.set(String((row as { id: string }).id), String((row as { project_name: string }).project_name || ''));
+      }
     }
   }
-
-  const typeGroupByTypeId = query.bddConstructionOnly
-    ? await loadAssetTypeGroupNameByTypeId(client)
-    : new Map<string, string>();
 
   return scanRows.filter((row) => {
     const bddPriority = row.bdd_priority ?? row.bddPriority;
@@ -144,7 +140,7 @@ async function filterScanRowsForBdd(
     if (!query.bddConstructionOnly) return true;
 
     const typeId = String(row.asset_type_id || row.assetTypeId || '');
-    const assetTypeGroupName = typeId ? typeGroupByTypeId.get(typeId) : undefined;
+    const assetTypeGroupName = typeId ? groupNameByTypeId.get(typeId) : undefined;
     const projectId = String(row.project_id || row.projectId || '');
     return isBddConstructionAsset({
       assetTypeGroupName,
@@ -154,11 +150,53 @@ async function filterScanRowsForBdd(
   });
 }
 
+async function getBddFilteredSortedRows(
+  client: SupabaseClient,
+  query: ProjectListQueryBody,
+  resolved: ReturnType<typeof buildResolvedFilterOpts>,
+  groupNameByTypeId: Map<string, string>,
+  searchMatchingAssetIds: string[] = [],
+): Promise<AssetIdScanRow[]> {
+  const useScanCache = !query.exportAll;
+  const scanHash = bddScanCacheHash(query);
+  const scanCacheKey = cacheKeys.bddConstructionScan(query.userId, query.periodName, scanHash);
+
+  if (useScanCache) {
+    const cached = await perfCacheGet<AssetIdScanRow[]>(scanCacheKey);
+    if (cached) return cached;
+  }
+
+  const bddTypeIds = query.bddConstructionOnly
+    ? resolveBddConstructionAssetTypeIds(groupNameByTypeId)
+    : [];
+  const bddSqlOr = query.bddConstructionOnly ? buildBddAssetSqlOrFilter(bddTypeIds) : null;
+
+  let scanRows =
+    searchMatchingAssetIds.length > 0
+      ? await fetchMatchingAssetRowsForSearchIds(
+          client,
+          query,
+          resolved,
+          searchMatchingAssetIds,
+          true,
+          bddSqlOr,
+        )
+      : await fetchMatchingAssetIdRows(client, query, resolved, true, bddSqlOr);
+  scanRows = await filterScanRowsForBdd(client, scanRows, query, groupNameByTypeId);
+  const sortedRows = sortRowsByAssetCode(scanRows, isAssetCodeSortAscending(query.sortBy));
+
+  if (useScanCache && sortedRows.length >= 0) {
+    await perfCacheSet(scanCacheKey, sortedRows, CACHE_TTL_MS.TABLE);
+  }
+  return sortedRows;
+}
+
 async function fetchMatchingAssetIdRows(
   client: SupabaseClient,
   query: ProjectListQueryBody,
   resolved: ReturnType<typeof buildResolvedFilterOpts>,
   extendedScan = false,
+  bddSqlOr: string | null = null,
 ): Promise<AssetIdScanRow[]> {
   const rows: AssetIdScanRow[] = [];
   let from = 0;
@@ -170,6 +208,9 @@ async function fetchMatchingAssetIdRows(
       .select(assetIdScanSelect(extendedScan))
       .order('id', { ascending: true });
     q = applyAllProjectListFilters(q as any, query.periodName, query, resolved) as any;
+    if (bddSqlOr) {
+      q = q.or(bddSqlOr) as typeof q;
+    }
     const { data, error } = await q.range(from, from + ID_SCAN_BATCH - 1);
     if (error) throw new Error(`assets id scan: ${error.message}`);
     const batch = (data || []) as unknown as AssetIdScanRow[];
@@ -180,6 +221,37 @@ async function fetchMatchingAssetIdRows(
       console.warn('[project-list-query] id scan capped at 250000');
       break;
     }
+  }
+  return rows;
+}
+
+/** Search path — load all pre-resolved asset ids with panel filters (no 120-id OR cap). */
+async function fetchMatchingAssetRowsForSearchIds(
+  client: SupabaseClient,
+  query: ProjectListQueryBody,
+  resolved: ReturnType<typeof buildResolvedFilterOpts>,
+  searchMatchingAssetIds: string[],
+  extendedScan = false,
+  bddSqlOr: string | null = null,
+): Promise<AssetIdScanRow[]> {
+  const ids = [...new Set(sanitizePostgrestIdList(searchMatchingAssetIds))];
+  if (ids.length === 0) return [];
+
+  const rows: AssetIdScanRow[] = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const chunk = ids.slice(i, i + 150);
+    let q = client
+      .from('assets')
+      .select(assetIdScanSelect(extendedScan))
+      .in('id', chunk);
+    q = applyProjectListAssetFilters(q as any, query.periodName, resolved) as any;
+    q = applyProjectListBudgetFilters(q as any, query.budgetCategoryIds, query.budgetFilter) as any;
+    if (bddSqlOr) {
+      q = q.or(bddSqlOr) as typeof q;
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(`assets search id chunk: ${error.message}`);
+    rows.push(...((data || []) as unknown as AssetIdScanRow[]));
   }
   return rows;
 }
@@ -243,6 +315,36 @@ async function fetchAssetRowsByIds(client: SupabaseClient, ids: string[]): Promi
   return ids.map((id) => byId.get(String(id))).filter((row): row is any => row != null);
 }
 
+/** Joined select — one round-trip per chunk (BDD page path). */
+async function fetchJoinedAssetRowsByIds(
+  client: SupabaseClient,
+  ids: string[],
+  select: string,
+): Promise<any[]> {
+  if (ids.length === 0) return [];
+  const out: any[] = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const chunk = ids.slice(i, i + 150);
+    const { data, error } = await client.from('assets').select(select).in('id', chunk);
+    if (error) throw new Error(`assets joined page: ${error.message}`);
+    if (data?.length) out.push(...data);
+  }
+  const byId = new Map(out.map((row) => [String((row as { id: string }).id), row] as const));
+  return ids.map((id) => byId.get(String(id))).filter((row): row is any => row != null);
+}
+
+async function loadBddPageAssets(
+  client: SupabaseClient,
+  pageIds: string[],
+  assetTypeGroupMaps: MasterEnrichContext['assetTypeGroupMaps'],
+): Promise<{ rawEnrichedAssets: any[]; pageProjects: any[] }> {
+  const pageJoined = await fetchJoinedAssetRowsByIds(client, pageIds, assetListSelect());
+  return {
+    rawEnrichedAssets: enrichAssetRowsFromJoinedSelect(pageJoined, assetTypeGroupMaps),
+    pageProjects: extractProjectsFromJoinedRows(pageJoined),
+  };
+}
+
 export async function loadProjectListQueryPage(
   client: SupabaseClient,
   query: ProjectListQueryBody,
@@ -268,7 +370,10 @@ export async function loadProjectListQueryPage(
   };
 
   const defaultQuery = isDefaultProjectListQueryFilters(query);
-  const dbTruthCount = await countDbTruthAssetsForPeriod(client, query.periodName);
+  const useBdd = needsBddFilter(query);
+  const dbTruthCount = useBdd
+    ? 0
+    : await countDbTruthAssetsForPeriod(client, query.periodName);
 
   const serverScope = await resolveAuthoritativeProjectListScope(client, query.userId, {
     users: master.users,
@@ -329,13 +434,55 @@ export async function loadProjectListQueryPage(
   }
 
   const useProgress = needsProgressFilter(query);
-  const useBdd = needsBddFilter(query);
+  const useSearchScan = needsSearchPaginationPath(query);
 
-  if (useProgress || useBdd) {
-    const scanRows = await fetchMatchingAssetIdRows(client, query, resolved, useBdd);
-    const bddRows = useBdd ? await filterScanRowsForBdd(client, scanRows, query) : scanRows;
-    const ascending = isAssetCodeSortAscending(query.sortBy);
-    const sortedRows = sortRowsByAssetCode(bddRows, ascending);
+  let searchMatchingAssetIds: string[] = [];
+  if (useSearchScan) {
+    searchMatchingAssetIds = await resolveFullSearchMatchingAssetIds(
+      client,
+      searchProjectIds,
+      searchAssetIds,
+    );
+    if (searchMatchingAssetIds.length === 0) {
+      return {
+        rawEnrichedAssets: [],
+        totalCount: 0,
+        debug: {
+          dataPolicy: PROJECT_LIST_DATA_POLICY,
+          dbTruthCount,
+          dbMatchedCount: 0,
+          afterProgressFilterCount: 0,
+          returnedRowCount: 0,
+          enrichDroppedCount: 0,
+          cacheLayer: 'none',
+          usedProgressFilter: useProgress,
+          defaultQuery,
+        },
+      };
+    }
+  }
+
+  if (useProgress || useBdd || useSearchScan) {
+    const sortedRows = useBdd
+      ? await getBddFilteredSortedRows(
+          client,
+          query,
+          resolved,
+          assetTypeGroupMaps.groupNameByTypeId,
+          searchMatchingAssetIds,
+        )
+      : sortRowsByAssetCode(
+          useSearchScan
+            ? await fetchMatchingAssetRowsForSearchIds(
+                client,
+                query,
+                resolved,
+                searchMatchingAssetIds,
+                false,
+              )
+            : await fetchMatchingAssetIdRows(client, query, resolved, false),
+          isAssetCodeSortAscending(query.sortBy),
+        );
     const dbMatchedCount = sortedRows.length;
 
     if (useProgress) {
@@ -352,14 +499,23 @@ export async function loadProjectListQueryPage(
       const from = (query.page - 1) * query.pageSize;
       const pageIds = orderedFilteredRows.slice(from, from + query.pageSize).map((row) => String(row.id));
 
-      const pageRaw = await fetchAssetRowsByIds(client, pageIds);
-      const projectIds = [...new Set(pageRaw.map((r: any) => String(r.project_id || r.projectId)).filter(Boolean))];
-      const projects = projectIds.length ? await fetchProjectsByIds(client, projectIds) : [];
-      const rawEnrichedAssets = enrichRawAssetRowsWithMaster(projects, pageRaw, enrichMaster);
+      const { rawEnrichedAssets, pageProjects } = query.bddConstructionOnly
+        ? await loadBddPageAssets(client, pageIds, assetTypeGroupMaps)
+        : await (async () => {
+            const pageRaw = await fetchAssetRowsByIds(client, pageIds);
+            const projectIds = [
+              ...new Set(pageRaw.map((r: any) => String(r.project_id || r.projectId)).filter(Boolean)),
+            ];
+            const projects = projectIds.length ? await fetchProjectsByIds(client, projectIds) : [];
+            return {
+              rawEnrichedAssets: enrichRawAssetRowsWithMaster(projects, pageRaw, enrichMaster),
+              pageProjects: projects,
+            };
+          })();
 
       return {
         rawEnrichedAssets,
-        pageProjects: projects,
+        pageProjects,
         totalCount: afterProgressFilterCount,
         debug: {
           dataPolicy: PROJECT_LIST_DATA_POLICY,
@@ -378,14 +534,23 @@ export async function loadProjectListQueryPage(
     const from = (query.page - 1) * query.pageSize;
     const pageIds = sortedRows.slice(from, from + query.pageSize).map((r) => String(r.id));
 
-    const pageRaw = await fetchAssetRowsByIds(client, pageIds);
-    const projectIds = [...new Set(pageRaw.map((r: any) => String(r.project_id || r.projectId)).filter(Boolean))];
-    const projects = projectIds.length ? await fetchProjectsByIds(client, projectIds) : [];
-    const rawEnrichedAssets = enrichRawAssetRowsWithMaster(projects, pageRaw, enrichMaster);
+    const { rawEnrichedAssets, pageProjects } = query.bddConstructionOnly
+      ? await loadBddPageAssets(client, pageIds, assetTypeGroupMaps)
+      : await (async () => {
+          const pageRaw = await fetchAssetRowsByIds(client, pageIds);
+          const projectIds = [
+            ...new Set(pageRaw.map((r: any) => String(r.project_id || r.projectId)).filter(Boolean)),
+          ];
+          const projects = projectIds.length ? await fetchProjectsByIds(client, projectIds) : [];
+          return {
+            rawEnrichedAssets: enrichRawAssetRowsWithMaster(projects, pageRaw, enrichMaster),
+            pageProjects: projects,
+          };
+        })();
 
     return {
       rawEnrichedAssets,
-      pageProjects: projects,
+      pageProjects,
       totalCount: dbMatchedCount,
       debug: {
         dataPolicy: PROJECT_LIST_DATA_POLICY,

@@ -34,17 +34,22 @@ export type AppBootstrapPayload = {
   allPeriods: BudgetPeriod[];
 };
 
-export async function fetchAppBootstrapData(): Promise<AppBootstrapPayload> {
+export async function fetchAppBootstrapData(
+  knownUserId?: number | null,
+): Promise<AppBootstrapPayload> {
   let users: User[] = [];
   let roles: UserRole[] = [];
   let multiYears: BudgetMultiYear[] = [];
   let periodSummaries: BudgetPeriod[] = [];
 
-  const bootstrapUserId = await resolveBootstrapUserId();
+  const bootstrapUserId =
+    knownUserId != null && Number.isFinite(knownUserId)
+      ? knownUserId
+      : await resolveBootstrapUserId();
 
   const base = (process.env.NEXT_PUBLIC_CAPEXBE_URL || '').replace(/\/$/, '').trim();
   if (base && typeof window !== 'undefined') {
-    const uid = bootstrapUserId ?? (await resolveBootstrapUserId());
+    const uid = bootstrapUserId;
     if (uid != null) {
       let accessToken: string | null = null;
       if (!useBackendSession()) {

@@ -35,6 +35,7 @@ interface HeaderProps {
     visibleHUs: HospitalUnit[];
     selectedHuId: string | null;
     onHUChange: (name: string) => void;
+    onHUHover?: (huId: string) => void;
     isLoadingBudgetPeriod?: boolean;
 }
 
@@ -55,6 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
     visibleHUs,
     selectedHuId,
     onHUChange,
+    onHUHover,
     isLoadingBudgetPeriod = false
 }) => {
     // Memoize selected items and options to prevent unnecessary re-renders
@@ -89,6 +91,17 @@ export const Header: React.FC<HeaderProps> = ({
     const handleHUChange = useCallback((name: string) => {
         onHUChange(name);
     }, [onHUChange]);
+
+    const handleHUOptionHover = useCallback(
+        (label: string) => {
+            if (!onHUHover) return;
+            const hu = visibleHUs.find(
+                (u) => formatHuLabel(u) === label || u.name === label,
+            );
+            if (hu) onHUHover(hu.id);
+        },
+        [onHUHover, visibleHUs],
+    );
 
     // FIX: Removed non-existent 'Page.BudgetProject' from filter arrays to resolve compilation error.
     const pagesWithArchetypeFilter = [Page.BudgetArchetype, Page.BudgetHU];
@@ -160,6 +173,10 @@ export const Header: React.FC<HeaderProps> = ({
                                 onSelect={(name) => {
                                   if (name === 'Loading...') return;
                                   handleHUChange(name);
+                                }}
+                                onOptionHover={(name) => {
+                                  if (name === 'Loading...') return;
+                                  handleHUOptionHover(name);
                                 }}
                                 className="w-56"
                                 placeholder={isLoadingBudgetPeriod ? 'Loading...' : undefined}

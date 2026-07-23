@@ -7,7 +7,7 @@ import {
   normAssetTaskStatusRow,
   normTaskLogRow,
 } from '../project-list/supabase-helpers';
-import { getAllTasks, getAllWorkflowSets } from '../project-list/master-data.loader';
+import { getSlimTasksForPipeline, getWorkflowSetsByIds } from '../project-list/master-data.loader';
 import { calculateRates, groupLogsByAsset, groupStatusesByAsset } from '../project-list/progress-aggregate';
 import type { ExecutiveSummaryListFilters } from './executive-summary.dto';
 import { applyExecutiveSummaryFilters } from './executive-summary-query.util';
@@ -167,6 +167,12 @@ const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'S
 const SLA_DAYS = 14;
 const LARGE_INVESTMENT_THRESHOLD = 500_000_000;
 const APPROVED_CONCLUSIONS = new Set(['Approved', 'Approved with Notes']);
+const CATEGORY_BUDGET_SELECT =
+  'budget_category_id, budget_plan, budget_carry_forward, budget_allocated, approved_budget, consumed_budget';
+const ARCHETYPE_BUDGET_SELECT = 'archetype_id, budget_category_id, budget_plan';
+const HU_BUDGET_SELECT = 'hospital_unit_id, budget_category_id, budget_plan';
+const ASSET_STATUS_SELECT = 'asset_id, task_id, status';
+const ASSET_LOG_SELECT = 'asset_id, task_id, completed_at';
 
 function rowNum(row: Record<string, unknown>, ...keys: string[]): number {
   for (const key of keys) {
@@ -248,19 +254,33 @@ async function fetchPeriodCategoryBudgets(
   client: SupabaseClient,
   periodName: string,
 ): Promise<CategoryBudgetRow[]> {
-  return fetchAllRecordsWhereEq(client, 'budget_period_category_budgets', 'period_name', periodName.trim());
+  return fetchAllRecordsWhereEq(
+    client,
+    'budget_period_category_budgets',
+    'period_name',
+    periodName.trim(),
+    CATEGORY_BUDGET_SELECT,
+  );
 }
 
 async function fetchArchetypeBudgetRows(client: SupabaseClient, periodName: string) {
-  return fetchAllRecordsWhereEq(client, 'budget_period_archetype_budgets', 'period_name', periodName.trim()).catch(
-    () => [] as unknown[],
-  );
+  return fetchAllRecordsWhereEq(
+    client,
+    'budget_period_archetype_budgets',
+    'period_name',
+    periodName.trim(),
+    ARCHETYPE_BUDGET_SELECT,
+  ).catch(() => [] as unknown[]);
 }
 
 async function fetchHuBudgetRows(client: SupabaseClient, periodName: string) {
-  return fetchAllRecordsWhereEq(client, 'budget_period_hospital_unit_budgets', 'period_name', periodName.trim()).catch(
-    () => [] as unknown[],
-  );
+  return fetchAllRecordsWhereEq(
+    client,
+    'budget_period_hospital_unit_budgets',
+    'period_name',
+    periodName.trim(),
+    HU_BUDGET_SELECT,
+  ).catch(() => [] as unknown[]);
 }
 
 function sumCategoryFields(rows: CategoryBudgetRow[]) {
@@ -517,16 +537,13 @@ function buildProjectLevelDonutFallback(
   };
 }
 
-async function buildCapexPipelineStatus(
-  client: SupabaseClient,
+type FlatAssetRow = AssetRow & { projectName: string; unitCode: string };
+
+function flattenAssetsForProjects(
   projects: ProjectRow[],
   assetsByProject: Map<string, AssetRow[]>,
-  fsByProject: Map<string, FsRow>,
-): Promise<ExecutiveDashboardCapexStatus> {
-  const [allTasks, allWorkflows] = await Promise.all([getAllTasks(client), getAllWorkflowSets(client)]);
-  const taskIdSets = buildTaskIdSets(allTasks as TaskMeta[]);
-
-  const flatAssets: Array<AssetRow & { projectName: string; unitCode: string }> = [];
+): FlatAssetRow[] {
+  const flatAssets: FlatAssetRow[] = [];
   for (const project of projects) {
     const pid = String(project.id);
     const hu = huFromRow(project);
@@ -538,6 +555,20 @@ async function buildCapexPipelineStatus(
       });
     }
   }
+  return flatAssets;
+}
+
+function buildCapexPipelineStatus(
+  projects: ProjectRow[],
+  assetsByProject: Map<string, AssetRow[]>,
+  fsByProject: Map<string, FsRow>,
+  allTasks: TaskMeta[],
+  workflows: unknown[],
+  statusesRaw: unknown[],
+  logsRaw: unknown[],
+): ExecutiveDashboardCapexStatus {
+  const taskIdSets = buildTaskIdSets(allTasks);
+  const flatAssets = flattenAssetsForProjects(projects, assetsByProject);
 
   if (flatAssets.length === 0 && projects.length > 0) {
     const fallback = buildProjectLevelDonutFallback(projects, fsByProject, assetsByProject);
@@ -550,12 +581,6 @@ async function buildCapexPipelineStatus(
     };
   }
 
-  const assetIds = flatAssets.map((a) => String(a.id));
-  const [statusesRaw, logsRaw] = await Promise.all([
-    assetIds.length ? fetchRecordsByAssetIds(client, 'asset_task_statuses', assetIds) : Promise.resolve([]),
-    assetIds.length ? fetchRecordsByAssetIds(client, 'task_logs', assetIds) : Promise.resolve([]),
-  ]);
-
   const statuses = (statusesRaw ?? []).map(normAssetTaskStatusRow);
   const logs = (logsRaw ?? []).map(normTaskLogRow);
   const statusesByAsset = groupStatusesByAsset(statuses);
@@ -567,7 +592,7 @@ async function buildCapexPipelineStatus(
       id: a.id,
       workflowSetId: a.workflow_set_id,
     }));
-  const completionRates = calculateRates(assetsForRates, allWorkflows, statusesByAsset, logsByAsset);
+  const completionRates = calculateRates(assetsForRates, workflows, statusesByAsset, logsByAsset);
 
   let assetCount = 0;
   let fsApprovalCount = 0;
@@ -633,14 +658,24 @@ async function fetchLatestFsByProject(
 
   const unique = [...new Set(projectIds.map(String))];
   const chunkSize = 100;
+  const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += chunkSize) {
-    const chunk = unique.slice(i, i + chunkSize);
-    const { data, error } = await client
-      .from('feasibility_studies')
-      .select('project_id, conclusion, created_at')
-      .in('project_id', chunk);
-    if (error) throw new Error(`fs map: ${error.message}`);
-    for (const row of data ?? []) {
+    chunks.push(unique.slice(i, i + chunkSize));
+  }
+
+  const chunkResults = await Promise.all(
+    chunks.map(async (chunk) => {
+      const { data, error } = await client
+        .from('feasibility_studies')
+        .select('project_id, conclusion, created_at')
+        .in('project_id', chunk);
+      if (error) throw new Error(`fs map: ${error.message}`);
+      return data ?? [];
+    }),
+  );
+
+  for (const rows of chunkResults) {
+    for (const row of rows) {
       const r = row as FsRow;
       const pid = String(r.project_id);
       const existing = latest.get(pid);
@@ -851,11 +886,11 @@ function buildHuUnitRows(
     .sort((a, b) => b.utilizationPct - a.utilizationPct);
 }
 
-async function fetchPendingFsStats(
-  client: SupabaseClient,
-  projectIds: string[],
-  fsByProject: Map<string, FsRow>,
-): Promise<{ pendingCount: number; avgDays: number | null; overdueCount: number }> {
+function computePendingFsStats(fsByProject: Map<string, FsRow>): {
+  pendingCount: number;
+  avgDays: number | null;
+  overdueCount: number;
+} {
   const now = Date.now();
   let totalDays = 0;
   let pendingCount = 0;
@@ -877,43 +912,32 @@ async function fetchPendingFsStats(
   };
 }
 
-async function fetchConsumptionByMonth(
-  client: SupabaseClient,
-  projectIds: string[],
+function buildConsumptionByMonthFromLogs(
+  logsRaw: unknown[],
   assetsByProject: Map<string, AssetRow[]>,
-): Promise<number[]> {
+  projectIds: string[],
+): number[] {
   const monthly = new Array(12).fill(0) as number[];
   if (projectIds.length === 0) return monthly;
 
-  const assetIds: string[] = [];
   const assetConsumed = new Map<string, number>();
   for (const pid of projectIds) {
     for (const asset of assetsByProject.get(String(pid)) ?? []) {
       const consumed = Number(asset.consumed_budget ?? 0);
       if (consumed <= 0) continue;
-      const aid = String(asset.id);
-      assetIds.push(aid);
-      assetConsumed.set(aid, consumed);
+      assetConsumed.set(String(asset.id), consumed);
     }
   }
+  if (assetConsumed.size === 0) return monthly;
 
   const assetMonth = new Map<string, number>();
-  if (assetIds.length > 0) {
-    const logs = await fetchRecordsInBatches(
-      client,
-      'task_logs',
-      'asset_id',
-      assetIds,
-      'asset_id, completed_at',
-    );
-    for (const row of logs ?? []) {
-      const r = row as { asset_id?: string; completed_at?: string };
-      const aid = String(r.asset_id ?? '');
-      const completedAt = r.completed_at;
-      if (!aid || !completedAt) continue;
-      const monthIdx = Math.max(0, Math.min(11, new Date(completedAt).getMonth()));
-      if (!assetMonth.has(aid)) assetMonth.set(aid, monthIdx);
-    }
+  for (const row of logsRaw ?? []) {
+    const r = row as { asset_id?: string; completed_at?: string };
+    const aid = String(r.asset_id ?? '');
+    const completedAt = r.completed_at;
+    if (!aid || !completedAt || !assetConsumed.has(aid)) continue;
+    const monthIdx = Math.max(0, Math.min(11, new Date(completedAt).getMonth()));
+    if (!assetMonth.has(aid)) assetMonth.set(aid, monthIdx);
   }
 
   for (const [aid, consumed] of assetConsumed.entries()) {
@@ -1018,13 +1042,15 @@ export async function loadExecutiveDashboardMetrics(
   const pn = periodName.trim();
   const scoped = hasScopeFilter(filters);
 
-  const [projects, categoryNames, categoryBudgetRows, archetypeBudgetRows, huBudgetRows] = await Promise.all([
-    fetchFilteredProjects(client, pn, filters),
-    fetchCategoryNames(client),
-    fetchPeriodCategoryBudgets(client, pn),
-    fetchArchetypeBudgetRows(client, pn),
-    fetchHuBudgetRows(client, pn),
-  ]);
+  const [projects, categoryNames, categoryBudgetRows, archetypeBudgetRows, huBudgetRows, slimTasks] =
+    await Promise.all([
+      fetchFilteredProjects(client, pn, filters),
+      fetchCategoryNames(client),
+      fetchPeriodCategoryBudgets(client, pn),
+      fetchArchetypeBudgetRows(client, pn),
+      fetchHuBudgetRows(client, pn),
+      getSlimTasksForPipeline(client),
+    ]);
 
   const projectIds = projects.map((p) => String(p.id));
   const projectIdSet = new Set(projectIds);
@@ -1032,6 +1058,23 @@ export async function loadExecutiveDashboardMetrics(
     fetchAssetsByProject(client, pn, filters, projectIdSet),
     fetchLatestFsByProject(client, projectIds),
   ]);
+
+  const flatAssets = flattenAssetsForProjects(projects, assetsByProject);
+  let statusesRaw: unknown[] = [];
+  let logsRaw: unknown[] = [];
+  let workflows: unknown[] = [];
+
+  if (flatAssets.length > 0) {
+    const assetIds = flatAssets.map((a) => String(a.id));
+    const workflowSetIds = [
+      ...new Set(flatAssets.map((a) => String(a.workflow_set_id ?? '')).filter(Boolean)),
+    ];
+    [statusesRaw, logsRaw, workflows] = await Promise.all([
+      fetchRecordsByAssetIds(client, 'asset_task_statuses', assetIds, ASSET_STATUS_SELECT),
+      fetchRecordsByAssetIds(client, 'task_logs', assetIds, ASSET_LOG_SELECT),
+      getWorkflowSetsByIds(client, workflowSetIds),
+    ]);
+  }
 
   const periodTotals = sumCategoryFields(categoryBudgetRows);
   const scopedTotals = scoped
@@ -1069,11 +1112,17 @@ export async function loadExecutiveDashboardMetrics(
     if (statusKey === 'ditolak') rejectedCount += 1;
   }
 
-  const [capexPipeline, fsStats, monthlyRealization] = await Promise.all([
-    buildCapexPipelineStatus(client, projects, assetsByProject, fsByProject),
-    fetchPendingFsStats(client, projectIds, fsByProject),
-    fetchConsumptionByMonth(client, projectIds, assetsByProject),
-  ]);
+  const fsStats = computePendingFsStats(fsByProject);
+  const monthlyRealization = buildConsumptionByMonthFromLogs(logsRaw, assetsByProject, projectIds);
+  const capexPipeline = buildCapexPipelineStatus(
+    projects,
+    assetsByProject,
+    fsByProject,
+    slimTasks as TaskMeta[],
+    workflows,
+    statusesRaw,
+    logsRaw,
+  );
 
   const capexStatus: ExecutiveDashboardCapexStatus = {
     ...capexPipeline,
@@ -1086,7 +1135,8 @@ export async function loadExecutiveDashboardMetrics(
     : periodTotals.consumedByCategory;
 
   const categoryBreakdown = buildCategoryBreakdownFromConsumed(consumedByCategory, categoryNames);
-  const budgetByUnit = buildHuUnitRows(projects, assetsByProject, huBudgetRows);
+  const allUnitRows = buildHuUnitRows(projects, assetsByProject, huBudgetRows);
+  const budgetByUnit = allUnitRows.slice(0, 10);
   const priorYearMonthly = new Array(12).fill(0) as number[];
 
   const capexTotal = capexStatus.projectCount;
@@ -1140,8 +1190,8 @@ export async function loadExecutiveDashboardMetrics(
     categoryBreakdown,
     monthlyTrend: buildMonthlyTrend(monthlyRealization, totalBudget, priorYearMonthly),
     topInvestments,
-    topUnits: budgetByUnit.slice(0, 5),
-    alerts: buildAlerts(budgetByUnit, projects, fsByProject, assetsByProject, fsStats.overdueCount),
+    topUnits: allUnitRows.slice(0, 5),
+    alerts: buildAlerts(allUnitRows, projects, fsByProject, assetsByProject, fsStats.overdueCount),
     updatedAt: new Date().toISOString(),
   };
 }

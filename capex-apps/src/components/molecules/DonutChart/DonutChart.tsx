@@ -4,30 +4,24 @@ interface DonutChartProps {
   title: string;
   data: { name: string; value: number; color: string }[];
   valueFormatter?: (value: number) => string;
+  /** Render chart body only — parent supplies the card shell */
+  embedded?: boolean;
 }
 
-export const DonutChart: React.FC<DonutChartProps> = ({ title, data, valueFormatter }) => {
+export const DonutChart: React.FC<DonutChartProps> = ({ title, data, valueFormatter, embedded = false }) => {
   const formatValue = valueFormatter ?? ((value: number) => String(value));
   const total = data.reduce((sum, item) => sum + item.value, 0);
   const radius = 50;
   const circumference = 2 * Math.PI * radius;
   let accumulatedOffset = 0;
 
-  if (total === 0) {
-    return (
-       <div className="bg-siloam-surface p-6 rounded-xl shadow-soft animate-fade-in h-full flex flex-col items-center justify-center">
-            <h3 className="text-lg font-bold text-siloam-text-primary mb-4 self-start">{title}</h3>
-            <p className="text-siloam-text-secondary">No data available.</p>
-        </div>
-    );
-  }
-
-  return (
-    <div className="bg-siloam-surface p-6 rounded-xl shadow-soft animate-fade-in h-full flex flex-col">
-      <h3 className="text-lg font-bold text-siloam-text-primary mb-4">{title}</h3>
-      <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-6">
-        <div className="relative w-40 h-40">
-          <svg viewBox="0 0 120 120" className="transform -rotate-90">
+  const chartBody =
+    total === 0 ? (
+      <p className="text-sm text-siloam-text-secondary text-center py-8">Belum ada data.</p>
+    ) : (
+      <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-4 md:gap-6">
+        <div className="relative w-36 h-36 shrink-0">
+          <svg viewBox="0 0 120 120" className="transform -rotate-90 w-full h-full">
             {data.map((item, index) => {
               const dasharray = (item.value / total) * circumference;
               const strokeDashoffset = accumulatedOffset;
@@ -49,23 +43,48 @@ export const DonutChart: React.FC<DonutChartProps> = ({ title, data, valueFormat
             })}
           </svg>
           <div className="absolute inset-0 flex items-center justify-center px-2">
-             <span className="text-sm font-bold text-siloam-text-primary text-center leading-tight tabular-nums" title={formatValue(total)}>
-               {formatValue(total)}
-             </span>
+            <span
+              className="text-sm font-bold text-siloam-text-primary text-center leading-tight tabular-nums"
+              title={formatValue(total)}
+            >
+              {formatValue(total)}
+            </span>
           </div>
         </div>
-        <div className="flex flex-col space-y-2">
+        <div className="flex flex-col gap-1.5 w-full md:max-w-[220px]">
           {data.map((item, index) => (
-            <div key={index} className="flex items-center text-sm">
-              <span className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: item.color }}></span>
-              <span className="text-siloam-text-primary font-medium">{item.name}:</span>
-              <span className="text-siloam-text-secondary ml-1 tabular-nums">
-                {formatValue(item.value)} ({(item.value / total * 100).toFixed(1)}%)
+            <div key={index} className="flex items-start gap-2 text-xs min-w-0">
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5"
+                style={{ backgroundColor: item.color }}
+              />
+              <span className="text-siloam-text-primary font-medium truncate">{item.name}</span>
+              <span className="text-siloam-text-secondary ml-auto tabular-nums shrink-0">
+                {(item.value / total * 100).toFixed(0)}%
               </span>
             </div>
           ))}
         </div>
       </div>
+    );
+
+  if (embedded) {
+    return chartBody;
+  }
+
+  if (total === 0) {
+    return (
+      <div className="bg-siloam-surface p-5 rounded-xl shadow-soft h-full flex flex-col border border-siloam-border/60 min-h-[360px]">
+        <h3 className="text-base font-bold text-siloam-text-primary mb-4">{title}</h3>
+        {chartBody}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-siloam-surface p-5 rounded-xl shadow-soft h-full flex flex-col border border-siloam-border/60 min-h-[360px]">
+      <h3 className="text-base font-bold text-siloam-text-primary mb-4">{title}</h3>
+      {chartBody}
     </div>
   );
 };

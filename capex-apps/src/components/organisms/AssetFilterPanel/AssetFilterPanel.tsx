@@ -4,6 +4,12 @@ import { NumericInput } from '../../atoms/NumericInput/NumericInput';
 import { PeriodCheckboxFilter } from '../../molecules/PeriodCheckboxFilter/PeriodCheckboxFilter';
 import { SlicerPanel } from '../SlicerPanel/SlicerPanel';
 
+const SearchIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+);
+
 const FilterIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707L3.293 7.293A1 1 0 013 6.586V4z" />
@@ -113,6 +119,10 @@ const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
 interface AssetFilterPanelProps {
     searchTerm: string;
     setSearchTerm: (term: string) => void;
+    /** Apply search to table — call on Enter. */
+    onSearchSubmit?: () => void;
+    /** Clear applied + draft search — call on "Clear All Filters". */
+    onSearchReset?: () => void;
     periodOptions?: string[];
     selectedPeriods?: string[];
     setSelectedPeriods?: (periods: string[]) => void;
@@ -159,6 +169,8 @@ interface AssetFilterPanelProps {
 
 export const AssetFilterPanel: React.FC<AssetFilterPanelProps> = ({
     searchTerm, setSearchTerm,
+    onSearchSubmit,
+    onSearchReset,
     periodOptions, selectedPeriods, setSelectedPeriods, periodEmptySelectionLabel,
     huOptions, huEmptySelectionLabel, selectedHUs, setSelectedHUs,
     completionRange, setCompletionRange,
@@ -184,7 +196,11 @@ export const AssetFilterPanel: React.FC<AssetFilterPanelProps> = ({
     const isFilterButtonHighlighted = hasActiveFilters || isFilterVisible;
 
     const resetFilters = () => {
-        setSearchTerm('');
+        if (onSearchReset) {
+            onSearchReset();
+        } else {
+            setSearchTerm('');
+        }
         setSelectedHUs([]);
         if (setSelectedPriorities) setSelectedPriorities([]);
         if (setSelectedFinishedTasks) setSelectedFinishedTasks([]);
@@ -206,15 +222,30 @@ export const AssetFilterPanel: React.FC<AssetFilterPanelProps> = ({
         <div className={`p-4 border-b border-siloam-border ${isFilterVisible ? 'relative z-30' : ''}`}>
             <div className="flex flex-wrap items-center gap-4">
                 {toolbarLeading ? <div className="shrink-0">{toolbarLeading}</div> : null}
-                <div className="flex-grow min-w-[200px]">
+                <div className="flex flex-grow min-w-[200px] items-center gap-2">
                     <input
                         type="text"
                         placeholder="Search assets, projects, HU..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full px-4 py-2 border border-siloam-border rounded-xl bg-siloam-bg focus:outline-none focus:ring-2 focus:ring-siloam-blue transition-all"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                onSearchSubmit?.();
+                            }
+                        }}
+                        className="w-full min-w-0 px-4 py-2 border border-siloam-border rounded-xl bg-siloam-bg focus:outline-none focus:ring-2 focus:ring-siloam-blue transition-all"
                     />
                 </div>
+                <button
+                    type="button"
+                    onClick={() => onSearchSubmit?.()}
+                    className="shrink-0 px-4 py-2 flex items-center gap-2 rounded-xl border border-siloam-blue bg-siloam-blue text-white transition-all duration-200 font-medium hover:bg-siloam-blue/90 shadow-sm"
+                    aria-label="Cari"
+                >
+                    <SearchIcon />
+                    <span>Cari</span>
+                </button>
                 <button
                     onClick={() => {
                       const next = !isFilterVisible;

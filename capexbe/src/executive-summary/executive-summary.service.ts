@@ -3,10 +3,25 @@ import { AuthZService } from '../auth/auth-z.service';
 import { fetchAllRecords, toCamelCase } from '../project-list/supabase-helpers';
 import { loadBudgetByPeriodName } from '../budget-hu/budget-period.loader';
 import { FsAuthService } from '../fs/fs-auth.service';
-import { parseListFilters, parsePeriodUserBody, parseProjectsPageBody } from './executive-summary.dto';
+import { CACHE_TTL_MS, cacheKeys } from '../shared/cache-keys';
+import { perfCacheGet, perfCacheSet } from '../shared/perf-cache';
+import {
+  parseListFilters,
+  parsePeriodUserBody,
+  parseProjectsPageBody,
+  type ExecutiveSummaryListFilters,
+} from './executive-summary.dto';
 import { loadExecutiveSummaryProjectsPage } from './executive-summary-projects.loader';
 import { loadExecutiveSummaryStats } from './executive-summary-stats.loader';
 import { loadExecutiveDashboardMetrics } from './executive-summary-dashboard.loader';
+
+const EXEC_DASHBOARD_CACHE_TTL_MS = CACHE_TTL_MS.DASHBOARD;
+const inflightDashboardMetrics = new Map<string, Promise<Record<string, unknown>>>();
+
+function filtersCacheKey(filters: ExecutiveSummaryListFilters): string {
+  const hu = [...filters.huCodes].map((c) => c.trim().toLowerCase()).sort().join(',');
+  return `${filters.archetypeId ?? ''}:${filters.capexType}:${filters.status}:${hu}`;
+}
 
 @Injectable()
 export class ExecutiveSummaryService {
@@ -70,8 +85,34 @@ export class ExecutiveSummaryService {
     const { userId, periodName } = parsePeriodUserBody(body);
     await this.authZ.assertHierarchyPermission(accessToken, userId, 'Executive Summary', 'view');
     const filters = parseListFilters(body);
-    const { client } = await this.fsAuth.getAuthenticatedRlsClient(accessToken, userId);
     const pn = periodName.trim();
+    const cacheKey = cacheKeys.executiveDashboardMetrics(userId, pn, filtersCacheKey(filters));
+
+    const cached = await perfCacheGet<Record<string, unknown>>(cacheKey);
+    if (cached) return cached;
+
+    const inflight = inflightDashboardMetrics.get(cacheKey);
+    if (inflight) return inflight;
+
+    const promise = this.computeDashboardMetrics(accessToken, userId, pn, filters).then(async (payload) => {
+      await perfCacheSet(cacheKey, payload, EXEC_DASHBOARD_CACHE_TTL_MS);
+      return payload;
+    });
+    inflightDashboardMetrics.set(cacheKey, promise);
+    try {
+      return await promise;
+    } finally {
+      inflightDashboardMetrics.delete(cacheKey);
+    }
+  }
+
+  private async computeDashboardMetrics(
+    accessToken: string,
+    userId: number,
+    pn: string,
+    filters: ExecutiveSummaryListFilters,
+  ) {
+    const { client } = await this.fsAuth.getAuthenticatedRlsClient(accessToken, userId);
 
     const [metrics, periodRow] = await Promise.all([
       loadExecutiveDashboardMetrics(client, pn, filters),

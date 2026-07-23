@@ -50,6 +50,8 @@ import {
   clearProjectListTableCachePage,
 } from '../lib/capexProjectListDiskCache';
 import { useCapexProjectListMasterConfig } from './CapexProjectList/useCapexProjectListMasterConfig';
+import { useProjectListMaster } from './CapexProjectList/useProjectListMaster';
+import type { ProjectListMasterBundle } from '../services/capexProjectListApi';
 import { isAssetCancelledForProjectList } from '../lib/assetLifecycle';
 import { logProjectListPipelineStage } from '../lib/projectListPipelineDebug';
 import { deleteSessionClientPool } from '../lib/capexProjectListSessionPool';
@@ -172,8 +174,9 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     setItemsPerPage,
     sortBy,
     setSortBy,
-    debouncedSearchTerm,
-    deferredClientSearchTerm,
+    appliedSearchTerm,
+    commitSearchTerm,
+    clearSearch,
     isSearchActive,
     isSearchStaging,
     panelFiltersKey,
@@ -247,6 +250,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       const maps = buildAssetFilterMaps(
         activePreloadedProjectList.projects,
         activePreloadedProjectList.priorities,
+        assets,
       );
       const lastMap = new Map(
         Object.entries(activePreloadedProjectList.assetLastTaskMap ?? {}).map(
@@ -347,7 +351,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
   ]);
 
   // UI State
-  const [selectedAsset, setSelectedAsset] = useState<EnrichedAsset | null>(null);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [isMomModalOpen, setMomModalOpen] = useState(false);
   const [momEditTarget, setMomEditTarget] = useState<MOM | null>(null);
   const [isAdhocTaskModalOpen, setAdhocTaskModalOpen] = useState(false);
@@ -385,10 +389,32 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     selectedPeriods,
   );
 
-  /** Master config (workflow, HU, roles) — sekali per periode, bukan tiap ganti filter. */
+  /** Master config (workflow, HU, roles) — sekali per user via `/project-list/master`. */
+  const applyMasterFromMasterBundle = useCallback((master: ProjectListMasterBundle) => {
+    if (!masterDataHydratedRef.current) {
+      masterDataHydratedRef.current = true;
+      setAllWorkflows(master.workflows);
+      setMasterData({ archetypes: master.archetypes, hus: master.hus, users: master.users });
+      setAllRoles(master.allRoles);
+      setAllTasks(master.allTasks);
+    }
+    if (master.priorities?.length) {
+      setPriorities(master.priorities);
+    }
+  }, []);
+
+  const masterQuery = useProjectListMaster(currentUser?.id, canView);
+
+  useEffect(() => {
+    if (masterQuery.data) {
+      applyMasterFromMasterBundle(masterQuery.data);
+    }
+  }, [masterQuery.data, applyMasterFromMasterBundle]);
+
+  /** Legacy: client pool / disk cache may still ship master inline. */
   const applyMasterFromSource = useCallback(
     (source: ListSource) => {
-      if (!masterDataHydratedRef.current) {
+      if ((source.workflows?.length ?? 0) > 0 && !masterDataHydratedRef.current) {
         masterDataHydratedRef.current = true;
         setAllWorkflows(source.workflows);
         setMasterData({ archetypes: source.archetypes, hus: source.hus, users: source.users });
@@ -407,7 +433,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
 
   useEffect(() => {
     masterDataHydratedRef.current = false;
-  }, [queryPeriodKey, currentUser?.id]);
+  }, [currentUser?.id]);
 
   const assetTypeGroupMaster = useMemo(
     () => buildAssetTypeGroupMasterMaps(allAssetTypeGroups, allAssetTypes),
@@ -458,6 +484,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     hasTableOnDisk,
     isBackgroundRefresh,
     isFilterRefreshing,
+    isPageTransition,
     sourceDataRef,
     clientFilterPoolRef,
     clientPoolRevision,
@@ -466,6 +493,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     activateClientPoolFromCache,
     mustRefetchTableRef,
     clearTableRows,
+    resetTableForFilterChange,
     resetAppliedTableCacheKeys,
     setClientFilterPoolReady,
     resetTablePipelineForPeriodChange,
@@ -485,8 +513,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     primaryPeriodName,
     isMultiPeriodView,
     hasPeriodSubsetFilter,
-    debouncedSearchTerm,
-    deferredClientSearchTerm,
+    appliedSearchTerm,
     searchTerm,
     isSearchActive,
     isSearchStaging,
@@ -505,6 +532,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     itemsPerPage,
     assetTypeGroupMaster,
     archetypeByHuName,
+    masterPriorities: priorities,
     applyMasterFromSource,
     masterDataHydratedRef,
     showToastRef,
@@ -512,6 +540,83 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     activePreloadedProjectList,
     resolveInitialPreloadScope,
   });
+
+  const handleSearchSubmit = useCallback(() => {
+    commitSearchTerm(searchTerm);
+    setSelectedAssetId(null);
+    resetTableForFilterChange();
+    if (currentUser?.id) {
+      void queryClient.invalidateQueries({
+        queryKey: ['screen', 'capex-project-list', 'table'],
+      });
+    }
+  }, [
+    searchTerm,
+    commitSearchTerm,
+    resetTableForFilterChange,
+    currentUser?.id,
+    queryClient,
+  ]);
+
+  const handleSearchReset = useCallback(() => {
+    clearSearch();
+    setSelectedAssetId(null);
+    resetTableForFilterChange();
+  }, [clearSearch, resetTableForFilterChange]);
+
+  const handleHUFilterChange = useCallback(
+    (next: string[]) => {
+      setSelectedHUs(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setSelectedHUs, resetTableForFilterChange],
+  );
+
+  const handlePriorityFilterChange = useCallback(
+    (next: string[]) => {
+      setSelectedPriorities(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setSelectedPriorities, resetTableForFilterChange],
+  );
+
+  const handleBudgetCategoryFilterChange = useCallback(
+    (next: string[]) => {
+      setSelectedBudgetCategoryIds(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setSelectedBudgetCategoryIds, resetTableForFilterChange],
+  );
+
+  const handleFinishedTaskFilterChange = useCallback(
+    (next: string[]) => {
+      setSelectedFinishedTasks(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setSelectedFinishedTasks, resetTableForFilterChange],
+  );
+
+  const handleBudgetProjectFilterChange = useCallback(
+    (next: string | null) => {
+      setSelectedBudgetFilter(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setSelectedBudgetFilter, resetTableForFilterChange],
+  );
+
+  const handleCompletionRangeChange = useCallback(
+    (next: { min: number; max: number }) => {
+      setCompletionRange(next);
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
+    },
+    [setCompletionRange, resetTableForFilterChange],
+  );
 
   const prevMeetingFiltersRef = useRef(meetingFilters);
 
@@ -536,10 +641,8 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
 
       prevMeetingFiltersRef.current = next;
       setMeetingFilters(next);
-      setCurrentPage(1);
-      resetAppliedTableCacheKeys();
-      mustRefetchTableRef.current = true;
-      clearTableRows({ keepTotal: true });
+      setSelectedAssetId(null);
+      resetTableForFilterChange();
 
       if (activateClientPoolFromCache(queryPeriodKey)) {
         sourceDataRef.current = clientFilterPoolRef.current!.source;
@@ -577,15 +680,17 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       activateClientPoolFromCache,
       sourceDataRef,
       clientFilterPoolRef,
-      resetAppliedTableCacheKeys,
+      resetTableForFilterChange,
       setClientFilterPoolReady,
-      mustRefetchTableRef,
-      clearTableRows,
-      setCurrentPage,
       setMeetingFilters,
       setSelectedHUs,
     ],
   );
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    void masterConfig.reloadMasterConfig();
+  }, [currentUser?.id, masterConfig]);
 
   /** Prune saved HU selection that conflicts with saved meeting archetype once master loads. */
   useEffect(() => {
@@ -664,13 +769,21 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     serverTableReady: tableRowsFiltersKey === tableDisplayKey,
     allAssets,
     listTotalAssetCount,
-    allowPreloadRows:
-      !useClientFilteredDisplay &&
-      !hasActiveTableFilters &&
-      allAssets.length > 0 &&
-      tableRowsFiltersKey !== tableDisplayKey,
-    deferTableRows: isSearchStaging || isFilterRefreshing,
+    allowPreloadRows: false,
+    deferTableRows: (isSearchActive && isSearchStaging) || isFilterRefreshing,
+    isPageTransition,
   });
+
+  /** Detail panel keyed by asset.id — resolve row from current page / cache only. */
+  const selectedAsset = useMemo(() => {
+    if (!selectedAssetId) return null;
+    const key = normAssetKey(selectedAssetId);
+    return (
+      paginatedAssets.find((a) => normAssetKey(a.id) === key) ??
+      allAssets.find((a) => normAssetKey(a.id) === key) ??
+      null
+    );
+  }, [selectedAssetId, paginatedAssets, allAssets]);
 
   /** Projects aligned with visible rows only — no full pool merge. */
   const tableProjectsForColumns = useMemo(() => {
@@ -772,14 +885,14 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
   // Page reset on filter change: useLayoutEffect(listFiltersKey) above runs before fetch.
 
   useEffect(() => {
-    if (selectedAsset && !paginatedAssets.some((a) => a.id === selectedAsset.id)) {
-      setSelectedAsset(null);
+    if (selectedAssetId && !paginatedAssets.some((a) => normAssetKey(a.id) === normAssetKey(selectedAssetId))) {
+      setSelectedAssetId(null);
     }
-  }, [paginatedAssets, selectedAsset]);
+  }, [paginatedAssets, selectedAssetId]);
 
   useEffect(() => {
     setIsActionPopupOpen(false);
-  }, [selectedAsset?.id]);
+  }, [selectedAssetId]);
 
   // Update hanya row asset yang berubah (tanpa reload seluruh list/screen)
   const refreshSingleAssetData = useCallback((asset: EnrichedAsset) => {
@@ -889,37 +1002,28 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     const idNorm = assetId != null ? normAssetKey(assetId) : null;
     const asset = assetId != null
       ? allAssets.find(a => normAssetKey(a.id) === idNorm)
-      : selectedAsset;
+      : selectedAssetId
+        ? allAssets.find((a) => normAssetKey(a.id) === normAssetKey(selectedAssetId))
+        : null;
     if (asset) refreshSingleAssetData(asset);
-  }, [allAssets, selectedAsset, refreshSingleAssetData]);
-
-  const prefetchTimelineForAsset = useCallback((asset: EnrichedAsset) => {
-    const wfId = asset.workflowSetId ?? (asset as { workflow_set_id?: string }).workflow_set_id ?? '';
-    if (!String(wfId).trim()) return;
-    const project = allProjects.find((p) => String(p.id) === String(asset.projectId));
-    void taskService.prefetchAssetTimeline(asset.id, String(wfId), project?.id);
-  }, [allProjects]);
+  }, [allAssets, selectedAssetId, refreshSingleAssetData]);
 
   const handleRowClick = useCallback((asset: EnrichedAsset) => {
-    prefetchTimelineForAsset(asset);
-    setSelectedAsset((prev) => (prev?.id === asset.id ? null : asset));
-  }, [prefetchTimelineForAsset]);
+    const id = String(asset.id);
+    setSelectedAssetId((prev) => {
+      if (prev === id) return null;
+      const wfId = asset.workflowSetId ?? (asset as { workflow_set_id?: string }).workflow_set_id ?? '';
+      if (String(wfId).trim()) {
+        const project = allProjects.find((p) => String(p.id) === String(asset.projectId));
+        void taskService.prefetchAssetTimeline(asset.id, String(wfId), project?.id);
+      }
+      return id;
+    });
+  }, [allProjects]);
 
-  const handleRowHover = useCallback((asset: EnrichedAsset) => {
-    prefetchTimelineForAsset(asset);
-  }, [prefetchTimelineForAsset]);
-
-  useEffect(() => {
-    if (!currentUser || paginatedAssets.length === 0) return;
-    const withActions = paginatedAssets.filter((a) => (a.actionableTaskCount ?? 0) > 0).slice(0, 8);
-    if (withActions.length === 0) return;
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-    };
-    const run = () => withActions.forEach(prefetchTimelineForAsset);
-    if (w.requestIdleCallback) w.requestIdleCallback(run, { timeout: 4000 });
-    else setTimeout(run, 800);
-  }, [currentUser, paginatedAssets, prefetchTimelineForAsset]);
+  const handleRowHover = useCallback((_asset: EnrichedAsset) => {
+    // Timeline/detail fetched on row click only (asset.id).
+  }, []);
 
   const [isExporting, setIsExporting] = useState(false);
 
@@ -1223,10 +1327,10 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       if (nextAsset) {
         setAllAssets((prev) => prev.map((a) => (normAssetKey(a.id) === normAssetKey(nextAsset.id) ? nextAsset : a)));
         syncSourceDataAfterEdit(nextAsset);
-        const maps = buildAssetFilterMaps(allProjects, priorities);
+        const maps = buildAssetFilterMaps(allProjects, priorities, allAssets);
         const stillMatchesFilters =
           filterEnrichedAssets([nextAsset], maps, assetLastTaskMap, {
-            searchLower: searchTerm.trim().toLowerCase(),
+            searchLower: appliedSearchTerm.trim().toLowerCase(),
             selectedHUs,
             selectedPriorities,
             selectedFinishedTasks,
@@ -1241,9 +1345,9 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
           if (!stillMatchesFilters && !isAssetCancelledForProjectList(nextAsset)) {
             showToast('Aset tidak lagi cocok dengan filter aktif.', 'success', { title: 'Filter' });
           }
-          setSelectedAsset(null);
+          setSelectedAssetId(null);
         } else {
-          setSelectedAsset(nextAsset);
+          setSelectedAssetId(String(nextAsset.id));
         }
       }
       showToast(
@@ -1271,8 +1375,9 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     syncSourceDataAfterEdit,
     allProjects,
     priorities,
+    allAssets,
     assetLastTaskMap,
-    searchTerm,
+    appliedSearchTerm,
     selectedHUs,
     selectedPriorities,
     selectedFinishedTasks,
@@ -1481,13 +1586,13 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
 
   const hasMobileActiveFilters = useMemo(
     () =>
-      Boolean(searchTerm) ||
+      Boolean(appliedSearchTerm) ||
       selectedHUs.length > 0 ||
       selectedPriorities.length > 0 ||
       selectedFinishedTasks.length > 0 ||
       selectedBudgetCategoryIds.length > 0,
     [
-      searchTerm,
+      appliedSearchTerm,
       selectedHUs.length,
       selectedPriorities.length,
       selectedFinishedTasks.length,
@@ -1507,6 +1612,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       availablePeriodOptions,
     );
     const otherFiltersActive =
+      Boolean(appliedSearchTerm.trim()) ||
       selectedHUs.length > 0 ||
       selectedPriorities.length > 0 ||
       selectedFinishedTasks.length > 0 ||
@@ -1521,6 +1627,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     selectedPeriods,
     currentRunningPeriod,
     availablePeriodOptions,
+    appliedSearchTerm,
     selectedHUs.length,
     selectedPriorities.length,
     selectedFinishedTasks.length,
@@ -1538,27 +1645,28 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     (tableQuery.isPending || tableQuery.isFetching) &&
     Boolean(capexBeUrl);
 
-  const isPageLoading =
-    tableQuery.isFetching &&
-    !tableQuery.isPlaceholderData &&
-    tableRowsFiltersKey !== tableDisplayKey &&
-    paginatedAssets.length > 0;
+  const isPageLoading = isPageTransition;
 
   const handlePageChange = useCallback(
     (page: number) => {
+      if (page === currentPage) return;
       resetAppliedTableCacheKeys();
+      clearTableRows({ keepTotal: true });
+      setSelectedAssetId(null);
       setCurrentPage(page);
     },
-    [resetAppliedTableCacheKeys],
+    [currentPage, resetAppliedTableCacheKeys, clearTableRows, setCurrentPage],
   );
 
   const handleItemsPerPageChange = useCallback(
     (size: number) => {
       resetAppliedTableCacheKeys();
+      clearTableRows({ keepTotal: true });
+      setSelectedAssetId(null);
       setItemsPerPage(size);
       setCurrentPage(1);
     },
-    [resetAppliedTableCacheKeys],
+    [resetAppliedTableCacheKeys, clearTableRows, setItemsPerPage, setCurrentPage],
   );
 
   const huEmptySelectionLabel = useMemo(() => {
@@ -1612,7 +1720,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
     steps: tourSteps,
   });
 
-  const handleCloseDetail = useCallback(() => setSelectedAsset(null), []);
+  const handleCloseDetail = useCallback(() => setSelectedAssetId(null), []);
   const handleCloseMomModal = useCallback(() => {
     setMomModalOpen(false);
     setMomEditTarget(null);
@@ -1682,9 +1790,6 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       setAllProjects((prev) =>
         prev.map((p) => (String(p.id) === String(savedProject.id) ? { ...p, ...savedProject } : p)),
       );
-      setSelectedAsset((prev) =>
-        prev && normAssetKey(prev.id) === mapKey ? { ...prev, ...savedAsset } : prev,
-      );
       syncSourceDataAfterEdit(savedAsset, savedProject);
       invalidateAssetTimelineCache(savedAsset.id);
       handleTaskUpdate(String(savedAsset.id));
@@ -1722,7 +1827,7 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       <div className={`
           w-full flex-col transition-all duration-300 ease-in-out
           md:border-r md:border-siloam-border
-          ${selectedAsset ? 'hidden md:flex md:w-1/2 lg:w-2/3' : 'flex md:w-full'}
+          ${selectedAssetId ? 'hidden md:flex md:w-1/2 lg:w-2/3' : 'flex md:w-full'}
       `}>
         <div
           data-tour="cpl-page-intro"
@@ -1757,6 +1862,8 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
           <AssetFilterPanel
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
+            onSearchSubmit={handleSearchSubmit}
+            onSearchReset={handleSearchReset}
             onFilterPanelOpen={refreshMasterConfig}
             toolbarLeading={
               canManageAssetTasks ? (
@@ -1778,20 +1885,20 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
             huOptions={huFilterOptions}
             huEmptySelectionLabel={huEmptySelectionLabel}
             selectedHUs={selectedHUs}
-            setSelectedHUs={setSelectedHUs}
+            setSelectedHUs={handleHUFilterChange}
             completionRange={completionRange}
-            setCompletionRange={setCompletionRange}
+            setCompletionRange={handleCompletionRangeChange}
             priorityOptions={priorityFilterOptions}
             selectedPriorities={selectedPriorities}
-            setSelectedPriorities={setSelectedPriorities}
+            setSelectedPriorities={handlePriorityFilterChange}
             finishedTaskOptions={finishedTaskOptions}
             selectedFinishedTasks={selectedFinishedTasks}
-            setSelectedFinishedTasks={setSelectedFinishedTasks}
+            setSelectedFinishedTasks={handleFinishedTaskFilterChange}
             selectedBudgetFilter={selectedBudgetFilter}
-            setSelectedBudgetFilter={setSelectedBudgetFilter}
+            setSelectedBudgetFilter={handleBudgetProjectFilterChange}
             budgetCategoryOptions={budgetCategoryFilterOptions}
             selectedBudgetCategoryIds={selectedBudgetCategoryIds}
-            setSelectedBudgetCategoryIds={setSelectedBudgetCategoryIds}
+            setSelectedBudgetCategoryIds={handleBudgetCategoryFilterChange}
             archetypeOptions={availableFilterArchetypes}
             assetTypeGroupOptions={assetTypeGroupFilterOptions}
             selectedArchetype={meetingFilters.archetype}
@@ -1804,13 +1911,14 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
         <CapexProjectListTableBlock
           columns={assetColumns}
           paginatedAssets={tableAssets}
-          selectedAssetId={selectedAsset?.id}
+          selectedAssetId={selectedAssetId}
           onRowClick={handleRowClick}
           onRowHover={handleRowHover}
           showInitialLoading={showInitialTableLoading || isPageLoading}
           isFilterRefreshing={isFilterRefreshing}
           isSearchActive={isSearchActive}
           isBackgroundRefresh={isBackgroundRefresh}
+          isPageTransition={isPageTransition}
           hasActiveFilters={hasMobileActiveFilters}
           footerTotalCount={footerTotalCount}
           currentPage={currentPage}
@@ -1827,10 +1935,10 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
         className={`
           w-full h-full flex-col transition-all duration-300 ease-in-out
           md:w-0
-          ${selectedAsset ? 'flex md:w-1/2 lg:w-1/3' : 'hidden'}
+          ${selectedAssetId ? 'flex md:w-1/2 lg:w-1/3' : 'hidden'}
         `}
       >
-        {selectedAsset && currentUser ? (
+        {selectedAssetId && selectedAsset && currentUser ? (
           <Suspense
             fallback={
               <div className="flex flex-1 items-center justify-center p-6 text-sm text-siloam-text-secondary">

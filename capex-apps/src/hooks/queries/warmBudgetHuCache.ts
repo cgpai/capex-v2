@@ -3,6 +3,7 @@ import type { BudgetPeriod } from '@/types';
 import { queryKeys } from '@/lib/query-keys';
 import { fetchBudgetHuConfigBundle } from '@/screens/BudgetHU/fetchBudgetHuConfig';
 import {
+  budgetPeriodHuProjectCounts,
   compareBudgetPeriodRichness,
   mergeRicherBudgetPeriods,
   readBudgetHuConfigCacheAnyAge,
@@ -14,6 +15,8 @@ import {
   type BudgetHuRemoteBundle,
 } from '@/hooks/queries/fetchBudgetHuPageData';
 import { fetchBudgetHuProjectAssetCounts } from '@/services/budgetHuPageApi';
+import type { BudgetHuPageBundle } from '@/services/budgetHuPageApi';
+import { scheduleStaggeredIdle } from '@/lib/scheduleIdlePrefetch';
 
 const CONFIG_STALE_MS = 30 * 60 * 1000;
 const PAGE_STALE_MS = 5 * 60 * 1000;
@@ -35,18 +38,34 @@ export function warmBudgetHuConfigCache(queryClient: QueryClient, userId: number
   });
 }
 
+/** Seed HU-scoped React Query keys from period-wide disk cache (fixes key mismatch). */
 export function hydrateBudgetHuPageFromDisk(
   queryClient: QueryClient,
   periodName: string,
   userId: number,
+  options?: { hospitalUnitId?: string },
 ): boolean {
   if (!periodName.trim() || !Number.isFinite(userId)) return false;
   const disk = readBudgetHuPageCacheAnyAge(periodName, userId);
-  if (!disk) return false;
-  queryClient.setQueryData(queryKeys.budgetHu.page(periodName, userId), {
-    ...disk,
-    source: 'bundle' as const,
-  });
+  if (!disk?.budgetPeriod) return false;
+
+  const targetHu = String(options?.hospitalUnitId ?? '').trim();
+  const counts = budgetPeriodHuProjectCounts(disk.budgetPeriod);
+  const huIds = targetHu
+    ? counts.get(targetHu)
+      ? [targetHu]
+      : []
+    : [...counts.entries()].filter(([, n]) => n > 0).map(([id]) => id);
+
+  if (huIds.length === 0) return false;
+
+  for (const huId of huIds) {
+    queryClient.setQueryData(queryKeys.budgetHu.page(periodName, userId, huId), {
+      ...disk,
+      scopedHuId: huId,
+      source: 'bundle' as const,
+    } satisfies BudgetHuRemoteBundle);
+  }
   return true;
 }
 
@@ -60,7 +79,9 @@ export async function prefetchBudgetHuPage(
   const period = periodName.trim();
   if (!period || !Number.isFinite(userId)) return;
   warmBudgetHuConfigCache(queryClient, userId);
-  hydrateBudgetHuPageFromDisk(queryClient, period, userId);
+  hydrateBudgetHuPageFromDisk(queryClient, period, userId, {
+    hospitalUnitId: options?.hospitalUnitId,
+  });
 
   const huId = String(options?.hospitalUnitId ?? '').trim();
   // Without a HU scope, do not pull the entire period tree (was the main load bottleneck).
@@ -106,13 +127,42 @@ export async function prefetchBudgetHuPage(
   await prefetch;
 }
 
+/** Prefetch other visible HUs in the background (amortize cold-cache cost). */
+export function prefetchBudgetHuUnitsIdle(
+  queryClient: QueryClient,
+  periodName: string,
+  userId: number,
+  huIds: readonly string[],
+  activeHuId?: string | null,
+): void {
+  const period = periodName.trim();
+  if (!period || !Number.isFinite(userId) || huIds.length === 0) return;
+  const active = String(activeHuId ?? '').trim();
+  const targets = huIds
+    .map((id) => String(id).trim())
+    .filter((id) => id && id !== active);
+
+  scheduleStaggeredIdle(
+    targets.map(
+      (huId) => () => {
+        void prefetchBudgetHuPage(queryClient, period, userId, { hospitalUnitId: huId });
+      },
+    ),
+    1200,
+  );
+}
+
 export function prefetchBudgetHuPageWithTimeout(
   queryClient: QueryClient,
   periodName: string,
   userId: number,
   timeoutMs = PREFETCH_TIMEOUT_MS,
+  options?: { hospitalUnitId?: string },
 ): Promise<void> {
-  return prefetchBudgetHuPage(queryClient, periodName, userId, { awaitMs: timeoutMs });
+  return prefetchBudgetHuPage(queryClient, periodName, userId, {
+    awaitMs: timeoutMs,
+    hospitalUnitId: options?.hospitalUnitId,
+  });
 }
 
 /** Sync App shell period fetch into TanStack Query so Budget HU paints without a second round-trip. */
@@ -126,27 +176,40 @@ export function hydrateBudgetHuPeriodInQueryCache(
   if (!periodKey || !Number.isFinite(userId)) return;
   if (isAppBudgetPeriodStructureShell(period, periodKey)) return;
 
-  queryClient.setQueryData(
-    queryKeys.budgetHu.page(periodKey, userId),
-    (old: BudgetHuRemoteBundle | undefined) => {
-      const merged = mergeRicherBudgetPeriods(periodKey, old?.budgetPeriod, period);
+  const merged = mergeRicherBudgetPeriods(periodKey, undefined, period) ?? period;
+  const bundle: BudgetHuPageBundle = {
+    budgetPeriod: merged,
+    routineAssetMaxBudget: 0,
+    categories: [],
+    priorities: [],
+    workflows: [],
+    assetTypes: [],
+    studies: [],
+  };
+
+  for (const [huId, count] of budgetPeriodHuProjectCounts(merged)) {
+    if (count <= 0) continue;
+    queryClient.setQueryData(queryKeys.budgetHu.page(periodKey, userId, huId), (old: BudgetHuRemoteBundle | undefined) => {
+      const nextPeriod = mergeRicherBudgetPeriods(periodKey, old?.budgetPeriod, merged) ?? merged;
       if (
         old?.budgetPeriod &&
         !isAppBudgetPeriodStructureShell(old.budgetPeriod, periodKey) &&
-        compareBudgetPeriodRichness(merged, old.budgetPeriod) <= 0
+        compareBudgetPeriodRichness(nextPeriod, old.budgetPeriod) <= 0
       ) {
         return old;
       }
       return {
-        budgetPeriod: merged ?? period,
+        ...bundle,
+        budgetPeriod: nextPeriod,
         routineAssetMaxBudget: old?.routineAssetMaxBudget ?? 0,
         categories: old?.categories ?? [],
         priorities: old?.priorities ?? [],
         workflows: old?.workflows ?? [],
         assetTypes: old?.assetTypes ?? [],
         studies: old?.studies ?? [],
+        scopedHuId: huId,
         source: 'bundle' as const,
       };
-    },
-  );
+    });
+  }
 }

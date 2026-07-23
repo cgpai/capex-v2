@@ -30,7 +30,6 @@ import {
   type BddConstructionTableBundle,
 } from '../../../lib/bddConstructionDiskCache';
 import { queryKeys } from '../../../lib/query-keys';
-import * as configService from '../../../services/configService';
 import {
   buildBddFilterMaps,
   filterBddConstructionAssets,
@@ -225,6 +224,7 @@ export function useBddConstructionTablePipeline({
     refetchOnReconnect: true,
     placeholderData: (prev) => prev ?? diskTableSeed ?? undefined,
     initialData: diskTableSeed,
+    refetchOnMount: diskTableSeed ? false : 'always',
     queryFn: async ({ signal }) => {
       const bff = useBeBffProxy();
       let token: string | null = null;
@@ -241,7 +241,7 @@ export function useBddConstructionTablePipeline({
             userId: currentUser.id,
             page: effectivePage,
             pageSize: effectivePageSize,
-            skipCache: true,
+            skipCache: mustRefetchTableRef.current,
             ...serverFilters,
           },
           token,

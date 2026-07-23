@@ -1,0 +1,16 @@
+{
+  "name": "capex",
+  "private": true,
+  "type": "module",
+  "description": "CAPEX monorepo — frontend + backend",
+  "scripts": {
+    "run": "node run run",
+    "dev": "node run run",
+    "stop": "node run stop",
+    "setup": "node run setup",
+    "install:all": "node run install",
+    "check": "node run check",
+    "run:be": "node run run-be",
+    "run:fe": "node run run-fe"
+  }
+}

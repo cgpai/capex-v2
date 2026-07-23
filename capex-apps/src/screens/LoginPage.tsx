@@ -10,6 +10,7 @@ import {
 } from '../lib/auth/authApi';
 import { useBackendSession } from '../lib/auth/authConstants';
 import { writeCachedAuthUser } from '../lib/authSessionCache';
+import { ExternalLink } from '@/components/atoms/ExternalLink/ExternalLink';
 
 const ADMIN_WHATSAPP = '6282230353419';
 
@@ -212,14 +213,12 @@ export const LoginPage = memo(function LoginPage() {
 
             <p className="pt-4 text-center text-sm text-[#4a6a8a]">
               Belum punya akun?{' '}
-              <a
+              <ExternalLink
                 href={adminWhatsAppUrl}
-                target="_blank"
-                rel="noopener noreferrer"
                 className="font-bold text-[#1e4a7a] underline-offset-2 hover:underline"
               >
                 Hubungi Admin
-              </a>
+              </ExternalLink>
             </p>
           </div>
         </div>

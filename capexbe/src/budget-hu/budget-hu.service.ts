@@ -4,7 +4,7 @@ import { AuthZService } from '../auth/auth-z.service';
 import { fetchAllRecords, fetchAllRecordsWhereEq, toCamelCase } from '../project-list/supabase-helpers';
 import { countAssetsByProjectIds } from '../executive-summary/executive-summary-query.util';
 import { getAllWorkflowSets } from '../project-list/master-data.loader';
-import { loadBudgetByPeriodName } from './budget-period.loader';
+import { loadBudgetByPeriodName, loadBudgetPeriodStructureOnly } from './budget-period.loader';
 import {
   assertHuInUserScope,
   allocateNextAssetCode,
@@ -50,6 +50,8 @@ export type BudgetHuPageBundleDto = BudgetHuConfigBundleDto & {
 const BUDGET_CATEGORY_SELECT = 'id,name,is_active';
 const PRIORITY_SELECT = 'id,name,is_active';
 const ASSET_TYPE_SELECT = 'id,name,group_id,is_active';
+const PROJECT_LIST_SELECT =
+  'id,hospital_unit_id,period_name,project_code,project_name,ax_code,budget_category_id,priority_id,budget_plan,budget_carry_forward,budget_allocated,approved_budget,consumed_budget,is_routine_asset_aggregator,is_pipeline_project';
 
 export type BudgetHuSavePayload = {
   periodName: string;
@@ -124,6 +126,8 @@ export class BudgetHuService {
     // Keys: app:table:budget-hu:{page|period|asset-counts}:{userId}:{period}
     await perfCacheDeleteByPrefix('app:table:budget-hu:page:');
     await perfCacheDeleteByPrefix('app:table:budget-hu:period:');
+    await perfCacheDeleteByPrefix('app:table:budget-hu:period-network:');
+    await perfCacheDeleteByPrefix('app:table:budget-hu:period-structure:');
     await perfCacheDeleteByPrefix('app:table:budget-hu:asset-counts:');
     await perfCacheDeleteByPrefix('app:dashboard:');
   }
@@ -209,12 +213,22 @@ export class BudgetHuService {
     userId: number,
     periodName: string,
     skipCache = false,
+    options?: { networkView?: boolean; networkShell?: boolean; categoryId?: string },
   ): Promise<{ budgetPeriod: any | null }> {
     if (!periodName?.trim()) {
       throw new BadRequestException('periodName is required');
     }
     await this.authZ.assertHierarchyPermission(accessToken, userId, 'Budget HU', 'view');
-    const key = cacheKeys.budgetHuPeriod(userId, periodName);
+    const networkView = options?.networkView === true;
+    const networkShell = options?.networkShell === true;
+    const categoryId = String(options?.categoryId ?? '').trim();
+    const key = networkShell
+      ? cacheKeys.budgetHuPeriodNetworkShell(userId, periodName)
+      : networkView && categoryId
+        ? cacheKeys.budgetHuPeriodNetworkCategory(userId, periodName, categoryId)
+        : networkView
+          ? cacheKeys.budgetHuPeriodNetwork(userId, periodName)
+          : cacheKeys.budgetHuPeriod(userId, periodName);
     if (skipCache) {
       this.responseCache.delete(key);
       this.inflight.delete(key);
@@ -232,8 +246,47 @@ export class BudgetHuService {
 
     return this.dedupe(key, async () => {
       const { client } = await this.authContext.getRlsClient(accessToken, userId);
-      const budgetPeriod = await loadBudgetByPeriodName(client, periodName.trim());
+      const budgetPeriod = await loadBudgetByPeriodName(client, periodName.trim(), {
+        networkView: networkView || networkShell || !!categoryId,
+        networkShell,
+        categoryId: categoryId || undefined,
+      });
       const payload = { budgetPeriod };
+      this.setProcessCache(key, payload, CACHE_TTL_MS.TABLE);
+      await perfCacheSet(key, payload, CACHE_TTL_MS.TABLE);
+      return payload;
+    });
+  }
+
+  async loadBudgetPeriodStructure(
+    accessToken: string,
+    userId: number,
+    periodName: string,
+    skipCache = false,
+  ): Promise<{ archetypes: any[] } | null> {
+    if (!periodName?.trim()) {
+      throw new BadRequestException('periodName is required');
+    }
+    await this.authZ.assertHierarchyPermission(accessToken, userId, 'Budget HU', 'view');
+    const key = cacheKeys.budgetHuPeriodStructure(userId, periodName);
+    if (skipCache) {
+      this.responseCache.delete(key);
+      this.inflight.delete(key);
+      await perfCacheDelete(key);
+    }
+
+    const processHit = this.getFromProcessCache<{ archetypes: any[] } | null>(key);
+    if (processHit) return processHit;
+
+    const sharedHit = await perfCacheGet<{ archetypes: any[] } | null>(key);
+    if (sharedHit) {
+      this.setProcessCache(key, sharedHit, CACHE_TTL_MS.TABLE);
+      return sharedHit;
+    }
+
+    return this.dedupe(key, async () => {
+      const { client } = await this.authContext.getRlsClient(accessToken, userId);
+      const payload = await loadBudgetPeriodStructureOnly(client, periodName.trim());
       this.setProcessCache(key, payload, CACHE_TTL_MS.TABLE);
       await perfCacheSet(key, payload, CACHE_TTL_MS.TABLE);
       return payload;
@@ -841,7 +894,7 @@ export class BudgetHuService {
 
     await this.authZ.assertHierarchyPermission(accessToken, userId, 'Budget HU', 'view');
     const { client } = await this.authContext.getRlsClient(accessToken, userId);
-    const rows = await fetchAllRecordsWhereEq(client, 'projects', 'period_name', pn, '*');
+    const rows = await fetchAllRecordsWhereEq(client, 'projects', 'period_name', pn, PROJECT_LIST_SELECT);
     const projects = (rows ?? []).map((row) => ({ ...toCamelCase(row), assets: [] }));
     return { projects };
   }

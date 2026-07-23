@@ -44,7 +44,6 @@ import * as notificationService from './services/notificationService';
 import { NAV_ITEMS } from './constants';
 import { pageToHref, pathnameToPage } from './lib/pageRoutes';
 import { resolvePostLoginLandingPage } from './lib/postLoginLanding';
-import { fetchBudgetPeriodOnlyFromBackend } from './services/budgetHuPageApi';
 import {
   resolveProjectListTableForDisplay,
   defaultScopesForDiskPrefetch,
@@ -61,6 +60,10 @@ import {
   warmCapexProjectListTableCacheWithTimeout,
   LOGIN_CPL_PREFETCH_AWAIT_MS,
 } from './lib/prefetchCapexProjectList';
+import {
+  hydrateBddConstructionTableFromDisk,
+  warmBddConstructionTableCache,
+} from './lib/prefetchBddConstruction';
 import { areUserScopesReadyForList, pickEnrichedUserFromPack } from './lib/appUserBootstrap';
 import {
   areShellPermissionsReady,
@@ -128,6 +131,7 @@ import { isCapexBeConfigured } from './lib/capexBeClient';
 import { useAuthStore } from './stores/authStore';
 import { readInitialPeriodShellState, writePeriodShellCache } from './lib/periodSelectionCache';
 import { prefetchDashboardBundle } from './lib/prefetchDashboardBundle';
+import { prefetchExecutiveDashboard } from './lib/prefetchExecutiveDashboard';
 import { prefetchBudgetSiloamPeriod } from './lib/prefetchBudgetSiloamPeriod';
 import { prefetchBudgetMultiYearPage } from './lib/prefetchBudgetMultiYearPage';
 import {
@@ -141,18 +145,20 @@ import {
 } from './lib/configurationCacheSync';
 import type { ConfigSliceKey } from './services/configurationApi';
 import { invalidateRequestCache } from './lib/requestCache';
+import { scheduleStaggeredIdle } from './lib/scheduleIdlePrefetch';
 import { prefetchMyTasksPage, hydrateMyTasksFromDisk } from './lib/prefetchMyTasksPage';
 import { MY_TASKS_STALE_MS, resolveMyTasksForUser } from './hooks/queries/fetchMyTasksPage';
 import { resolveMyTasksBundleForDisplay } from './lib/myTasksDiskCache';
 import {
   hydrateBudgetHuPageFromDisk,
-  hydrateBudgetHuPeriodInQueryCache,
   prefetchBudgetHuPage,
   prefetchBudgetHuPageWithTimeout,
+  prefetchBudgetHuUnitsIdle,
   warmBudgetHuConfigCache,
 } from './hooks/queries/warmBudgetHuCache';
 import {
   findHuInBudgetPeriod,
+  foldNetworkBudgetSaveIntoAppPeriod,
   hasFullBudgetPeriodOnDisk,
   mergeBudgetPeriodMasterStructure,
   readBudgetHuFilterSelection,
@@ -278,7 +284,9 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
   const pathname = usePathname();
   const router = useRouter();
   const routePage = useMemo(() => pathnameToPage(pathname), [pathname]);
-  const [dataInitialized, setDataInitialized] = useState(false);
+  const [dataInitialized, setDataInitialized] = useState(
+    () => Boolean(initialBootstrap?.users?.length && initialBootstrap?.roles?.length),
+  );
   /** false sampai probe /auth/me selesai — hindari LazyLoginPage saat reload masih memvalidasi cookie. */
   const [authProbeComplete, setAuthProbeComplete] = useState(false);
 
@@ -499,10 +507,10 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
         });
       }
       setCurrentBudgetPeriod((prev) => {
-        // Keep existing HU dropdown list; only fold in richer project/asset data from the save.
-        const merged = prev
-          ? mergeBudgetPeriodMasterStructure(next, prev.archetypes, next.periodName)
-          : next;
+        const merged =
+          prev && prev.periodName === next.periodName
+            ? foldNetworkBudgetSaveIntoAppPeriod(prev, next)
+            : (JSON.parse(JSON.stringify(next)) as BudgetPeriod);
         const uid = currentUser?.id;
         if (uid && merged.periodName) {
           writeBudgetPeriodCache(merged.periodName, uid, merged);
@@ -549,77 +557,29 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
 
         if (hasCachedFull) {
             setCurrentBudgetPeriod(cachedFull);
-            setIsLoadingBudgetPeriod(false);
-            // Fill missing HUs into the tree quietly (does not change selected filter).
-            void budgetService.getBudgetPeriodStructure(selectedPeriodName).then((structure) => {
-              if (!structure?.archetypes?.length) return;
-              setCurrentBudgetPeriod((prev) =>
-                mergeBudgetPeriodMasterStructure(prev ?? cachedFull, structure.archetypes, selectedPeriodName),
-              );
-            }).catch(() => {
-              /* ignore — dropdown stays on cache */
-            });
         } else {
             setIsLoadingBudgetPeriod(true);
         }
 
-        let structure: { archetypes: BudgetPeriod['archetypes'] } | null = null;
-
         try {
-            // Only fetch master HU structure when dropdown has nothing yet — avoid re-refreshing the unit selector.
-            if (!hasCachedFull) {
-                structure = await budgetService.getBudgetPeriodStructure(selectedPeriodName);
-                if (structure?.archetypes?.length) {
-                    setCurrentBudgetPeriod(
-                      mergeBudgetPeriodMasterStructure(null, structure.archetypes, selectedPeriodName),
-                    );
-                    setIsLoadingBudgetPeriod(false);
-                }
+            const structure = await budgetService.getBudgetPeriodStructure(selectedPeriodName);
+            if (structure?.archetypes?.length) {
+                setCurrentBudgetPeriod((prev) =>
+                  mergeBudgetPeriodMasterStructure(
+                    hasCachedFull ? (prev ?? cachedFull!) : null,
+                    structure.archetypes,
+                    selectedPeriodName,
+                  ),
+                );
+            } else if (!hasCachedFull) {
+                setCurrentBudgetPeriod(null);
             }
-
-            const runFullLoad = async () => {
-                let full: BudgetPeriod | null = null;
-                try {
-                    if (useBackendSession() || (await getAccessTokenForBackend())) {
-                        full = await fetchBudgetPeriodOnlyFromBackend(selectedPeriodName, uid);
-                    }
-                } catch (e) {
-                    console.error('Budget period from BE (period):', e);
-                }
-                if (!full) {
-                    try {
-                        full =
-                            (await budgetService.getBudgetByPeriodName(selectedPeriodName)) ?? null;
-                    } catch (e) {
-                        console.error('Failed to fetch full budget period (client):', e);
-                    }
-                }
-                if (full) {
-                    setCurrentBudgetPeriod((prev) => {
-                      // Preserve stable HU dropdown from prev; merge incoming project/asset data only.
-                      const withUnits = prev?.archetypes?.length
-                        ? mergeBudgetPeriodMasterStructure(full, prev.archetypes, selectedPeriodName)
-                        : full;
-                      writeBudgetPeriodCache(selectedPeriodName, uid, withUnits);
-                      hydrateBudgetHuPeriodInQueryCache(
-                        queryClient,
-                        selectedPeriodName,
-                        uid,
-                        withUnits,
-                      );
-                      return withUnits;
-                    });
-                }
-            };
-
-            void runFullLoad().finally(() => {
-                setIsLoadingBudgetPeriod(false);
-            });
         } catch (error) {
-            console.error('Failed to fetch budget period:', error);
+            console.error('Failed to fetch budget period structure:', error);
             if (!hasCachedFull) {
                 setCurrentBudgetPeriod(null);
             }
+        } finally {
             setIsLoadingBudgetPeriod(false);
         }
     };
@@ -631,12 +591,6 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     if (!authProbeComplete || !selectedPeriodName?.trim() || !currentUser?.id) return;
     hydrateCapexProjectListTableFromDisk(queryClient, selectedPeriodName, currentUser.id);
   }, [authProbeComplete, selectedPeriodName, currentUser?.id, queryClient]);
-
-  /** Prefetch Budget HU bundle segera setelah login — data siap sebelum halaman dibuka. */
-  useEffect(() => {
-    if (!authProbeComplete || !currentUser?.id || !selectedPeriodName.trim()) return;
-    prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id);
-  }, [authProbeComplete, currentUser?.id, selectedPeriodName, queryClient]);
 
   /** Hydrate disk → TanStack Query supaya Budget HU instant setelah F5. */
   useEffect(() => {
@@ -782,6 +736,9 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
               me.user.roles,
               me.user.idleTimeoutMs,
             );
+            if (initialBootstrap?.users?.length) {
+              setDataInitialized(true);
+            }
             return;
           }
           finishUnauthenticated();
@@ -803,7 +760,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
 
   const bootstrapQuery = useQuery({
     queryKey: queryKeys.app.bootstrap,
-    queryFn: fetchAppBootstrapData,
+    queryFn: () => fetchAppBootstrapData(currentUser?.id),
     enabled: typeof window !== 'undefined' && authProbeComplete && !!currentUser,
     initialData: initialBootstrap ?? undefined,
     staleTime: 120_000,
@@ -811,8 +768,8 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     retry: 1,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    /** Data halaman di disk/query; bootstrap hanya sinkron master di background. */
-    refetchOnMount: true,
+    /** Cache sudah ada → jangan block UI dengan refetch sync di mount. */
+    refetchOnMount: !initialBootstrap?.users?.length,
   });
 
   const lastBootstrapSyncAtRef = useRef(0);
@@ -854,7 +811,9 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
       pickDefaultBudgetPeriodNameForYear(d.allPeriods, new Date().getFullYear(), null);
     if (Number.isFinite(uid) && period) {
       hydrateCapexProjectListTableFromDisk(queryClient, period, uid);
-      prefetchBudgetHuPage(queryClient, period, uid);
+      prefetchBudgetHuPage(queryClient, period, uid, {
+        hospitalUnitId: selectedHuId ?? undefined,
+      });
     }
     if (Number.isFinite(uid)) {
       prefetchBudgetMultiYearPage(queryClient, uid);
@@ -899,7 +858,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     syncPeriodSelectionFromLists,
   ]);
 
-  /** Warm page caches setelah shell permissions siap — jangan bersaing dengan bootstrap kritis. */
+  /** Warm page caches — disk hydrate sync; network prefetch idle + route-first. */
   useLayoutEffect(() => {
     if (!authProbeComplete || !currentUser?.id) return;
 
@@ -909,25 +868,91 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
 
     if (!selectedPeriodName.trim()) return;
 
-    void prefetchPoUpdatePage(queryClient, currentUser.id, selectedPeriodName);
-    hydratePoUpdatePageFromDisk(queryClient, currentUser.id, selectedPeriodName);
-    void prefetchGrUpdatePage(queryClient, currentUser.id);
-    prefetchBudgetMultiYearPage(queryClient, currentUser.id);
+    const uid = currentUser.id;
+    const period = selectedPeriodName;
+    const huId = selectedHuId ?? undefined;
 
-    prefetchDashboardBundle(queryClient, selectedPeriodName, currentUser.id);
-    prefetchBudgetSiloamPeriod(queryClient, selectedPeriodName, currentUser.id);
-    prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id);
-    hydrateBudgetHuPageFromDisk(queryClient, selectedPeriodName, currentUser.id);
-    hydrateCapexProjectListTableFromDisk(queryClient, selectedPeriodName, currentUser.id);
-    void warmCapexProjectListTableCache(queryClient, selectedPeriodName, currentUser.id);
-    hydrateMyTasksFromDisk(queryClient, currentUser.id, selectedPeriodName || undefined);
-    hydrateFsUpdatePageFromDisk(queryClient, selectedPeriodName, currentUser.id);
-    hydrateFsApprovalPageFromDisk(queryClient, selectedPeriodName, currentUser.id);
-    hydrateFsRealizationPageFromDisk(queryClient, selectedPeriodName, currentUser.id);
-    void prefetchFsUpdatePage(queryClient, selectedPeriodName, currentUser.id);
-    void prefetchFsApprovalPage(queryClient, selectedPeriodName, currentUser.id);
-    void prefetchFsRealizationPage(queryClient, selectedPeriodName, currentUser.id);
-  }, [authProbeComplete, dataInitialized, currentUser?.id, selectedPeriodName, queryClient]);
+    hydratePoUpdatePageFromDisk(queryClient, uid, period);
+    hydrateBudgetHuPageFromDisk(queryClient, period, uid);
+    hydrateCapexProjectListTableFromDisk(queryClient, period, uid);
+    hydrateMyTasksFromDisk(queryClient, uid, period || undefined);
+    hydrateFsUpdatePageFromDisk(queryClient, period, uid);
+    hydrateFsApprovalPageFromDisk(queryClient, period, uid);
+    hydrateFsRealizationPageFromDisk(queryClient, period, uid);
+    if (currentUser) {
+      hydrateBddConstructionTableFromDisk(queryClient, period, currentUser);
+    }
+
+    const warmCurrentRoute = () => {
+      switch (routePage) {
+        case Page.BudgetHU:
+          prefetchBudgetHuPage(queryClient, period, uid, { hospitalUnitId: huId });
+          break;
+        case Page.Dashboard:
+          prefetchDashboardBundle(queryClient, period, uid);
+          break;
+        case Page.ExecutiveSummary:
+          prefetchExecutiveDashboard(queryClient, period, uid, selectedArchetypeId ?? null);
+          break;
+        case Page.BudgetPeriod:
+        case Page.BudgetArchetype:
+          prefetchBudgetSiloamPeriod(queryClient, period, uid);
+          break;
+        case Page.CapexProjectList:
+          void warmCapexProjectListTableCache(queryClient, period, uid);
+          break;
+        case Page.POUpdate:
+          void prefetchPoUpdatePage(queryClient, uid, period);
+          break;
+        case Page.GRUpdate:
+          void prefetchGrUpdatePage(queryClient, uid);
+          break;
+        case Page.FSUpdate:
+          void prefetchFsUpdatePage(queryClient, period, uid);
+          break;
+        case Page.FSApproval:
+          void prefetchFsApprovalPage(queryClient, period, uid);
+          break;
+        case Page.FSRealization:
+          void prefetchFsRealizationPage(queryClient, period, uid);
+          break;
+        case Page.BudgetMultiYear:
+          prefetchBudgetMultiYearPage(queryClient, uid);
+          break;
+        case Page.BDDConstruction:
+          if (currentUser) {
+            void warmBddConstructionTableCache(queryClient, period, currentUser);
+          }
+          break;
+        case Page.MyTask:
+          prefetchMyTasksPage(queryClient, currentUser, period || undefined);
+          break;
+        default:
+          break;
+      }
+    };
+    warmCurrentRoute();
+
+    scheduleStaggeredIdle([
+      () => prefetchBudgetHuPage(queryClient, period, uid, { hospitalUnitId: huId }),
+      () => prefetchDashboardBundle(queryClient, period, uid),
+      () => prefetchExecutiveDashboard(queryClient, period, uid),
+      () => prefetchBudgetSiloamPeriod(queryClient, period, uid),
+      () => void prefetchPoUpdatePage(queryClient, uid, period),
+      () => prefetchBudgetMultiYearPage(queryClient, uid),
+      () => void warmCapexProjectListTableCache(queryClient, period, uid),
+      // GR + FS bundles are heavy — only on nav hover (useNavPrefetch) or when route is active.
+    ]);
+  }, [
+    authProbeComplete,
+    dataInitialized,
+    currentUser,
+    selectedPeriodName,
+    selectedArchetypeId,
+    selectedHuId,
+    routePage,
+    queryClient,
+  ]);
 
   const handlePeriodChange = useCallback(
     (name: string) => {
@@ -939,16 +964,16 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
       setSelectedHuId(pin?.huId ?? null);
       if (currentUser?.id) {
         prefetchDashboardBundle(queryClient, name, currentUser.id);
-        prefetchBudgetHuPage(queryClient, name, currentUser.id);
+        prefetchExecutiveDashboard(queryClient, name, currentUser.id);
+        prefetchBudgetHuPage(queryClient, name, currentUser.id, {
+          hospitalUnitId: pin?.huId ?? undefined,
+        });
         hydrateBudgetHuPageFromDisk(queryClient, name, currentUser.id);
         hydrateCapexProjectListTableFromDisk(queryClient, name, currentUser.id);
         hydrateMyTasksFromDisk(queryClient, currentUser.id, name || undefined);
         hydrateFsUpdatePageFromDisk(queryClient, name, currentUser.id);
         hydrateFsApprovalPageFromDisk(queryClient, name, currentUser.id);
         hydrateFsRealizationPageFromDisk(queryClient, name, currentUser.id);
-        void prefetchFsUpdatePage(queryClient, name, currentUser.id);
-        void prefetchFsApprovalPage(queryClient, name, currentUser.id);
-        void prefetchFsRealizationPage(queryClient, name, currentUser.id);
       }
       prefetchBudgetSiloamPeriod(queryClient, name, currentUser?.id);
     },
@@ -1183,6 +1208,18 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
   ]);
 
   useEffect(() => {
+    if (routePage !== Page.BudgetHU) return;
+    if (!currentUser?.id || !selectedPeriodName.trim() || visibleHUs.length === 0) return;
+    prefetchBudgetHuUnitsIdle(
+      queryClient,
+      selectedPeriodName,
+      currentUser.id,
+      visibleHUs.map((u) => u.id),
+      selectedHuId,
+    );
+  }, [routePage, currentUser?.id, selectedPeriodName, visibleHUs, selectedHuId, queryClient]);
+
+  useEffect(() => {
     if (isLoadingBudgetPeriod || !currentBudgetPeriod) return;
     if (!selectedPeriodName.trim() || !selectedArchetypeId || !selectedHuId) return;
 
@@ -1265,11 +1302,26 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
         if (selectedPeriodName.trim() && selectedArchetypeId) {
           writeBudgetHuFilterSelection(selectedPeriodName, selectedArchetypeId, hu.id, hu.code);
         }
+        if (currentUser?.id && selectedPeriodName.trim()) {
+          void prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id, {
+            hospitalUnitId: hu.id,
+          });
+        }
       } else {
         setSelectedHuId(null);
       }
     },
-    [visibleHUs, formatHuLabel, selectedPeriodName, selectedArchetypeId],
+    [visibleHUs, formatHuLabel, selectedPeriodName, selectedArchetypeId, currentUser?.id, queryClient],
+  );
+
+  const handleHUHoverPrefetch = useCallback(
+    (huId: string) => {
+      if (!currentUser?.id || !selectedPeriodName.trim() || !huId.trim()) return;
+      void prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id, {
+        hospitalUnitId: huId,
+      });
+    },
+    [currentUser?.id, selectedPeriodName, queryClient],
   );
 
   // Added CapexProjectList to pagesWithFilters to show the budget period selector in header
@@ -1287,6 +1339,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     router,
     queryClient,
     selectedPeriodName,
+    selectedHuId,
     currentUser,
     permissions,
   });
@@ -2103,6 +2156,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
                 visibleHUs={visibleHUs}
                 selectedHuId={selectedHuId}
                 onHUChange={handleHUChange}
+                onHUHover={handleHUHoverPrefetch}
                 isLoadingBudgetPeriod={isLoadingBudgetPeriod}
             />
         )}

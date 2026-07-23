@@ -23,12 +23,17 @@ import {
   hydrateCapexProjectListTableFromDisk,
   warmCapexProjectListTableCache,
 } from '@/lib/prefetchCapexProjectList';
+import {
+  hydrateBddConstructionTableFromDisk,
+  warmBddConstructionTableCache,
+} from '@/lib/prefetchBddConstruction';
 import { prefetchBudgetHuPage } from '@/hooks/queries/warmBudgetHuCache';
 import {
   hydrateConfigurationFromDisk,
   prefetchConfigurationPageCritical,
 } from '@/lib/prefetchConfigurationPage';
 import { prefetchBudgetMultiYearPage } from '@/lib/prefetchBudgetMultiYearPage';
+import { prefetchExecutiveDashboard } from '@/lib/prefetchExecutiveDashboard';
 
 type PermissionsLike = {
   canAccessPage: (page: Page) => boolean;
@@ -38,10 +43,11 @@ export function useNavPrefetch(options: {
   router: AppRouterInstance;
   queryClient: QueryClient;
   selectedPeriodName: string;
+  selectedHuId?: string | null;
   currentUser: User | null;
   permissions: PermissionsLike;
 }) {
-  const { router, queryClient, selectedPeriodName, currentUser, permissions } = options;
+  const { router, queryClient, selectedPeriodName, selectedHuId, currentUser, permissions } = options;
 
   return useCallback(
     (page: Page) => {
@@ -72,8 +78,14 @@ export function useNavPrefetch(options: {
         hydrateCapexProjectListTableFromDisk(queryClient, selectedPeriodName, currentUser.id);
         void warmCapexProjectListTableCache(queryClient, selectedPeriodName, currentUser.id);
       }
+      if (page === Page.BDDConstruction && currentUser && selectedPeriodName.trim()) {
+        hydrateBddConstructionTableFromDisk(queryClient, selectedPeriodName, currentUser);
+        void warmBddConstructionTableCache(queryClient, selectedPeriodName, currentUser);
+      }
       if (page === Page.BudgetHU && currentUser?.id && selectedPeriodName.trim()) {
-        prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id);
+        prefetchBudgetHuPage(queryClient, selectedPeriodName, currentUser.id, {
+          hospitalUnitId: selectedHuId ?? undefined,
+        });
       }
       if (page === Page.BudgetMultiYear && currentUser?.id) {
         prefetchBudgetMultiYearPage(queryClient, currentUser.id);
@@ -82,7 +94,10 @@ export function useNavPrefetch(options: {
         hydrateConfigurationFromDisk(queryClient, currentUser.id);
         prefetchConfigurationPageCritical(queryClient, currentUser.id);
       }
+      if (page === Page.ExecutiveSummary && currentUser?.id && selectedPeriodName.trim()) {
+        prefetchExecutiveDashboard(queryClient, selectedPeriodName, currentUser.id);
+      }
     },
-    [router, queryClient, selectedPeriodName, currentUser, permissions],
+    [router, queryClient, selectedPeriodName, selectedHuId, currentUser, permissions],
   );
 }

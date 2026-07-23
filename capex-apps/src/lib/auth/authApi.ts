@@ -143,7 +143,7 @@ function errorFromAuthResponse(
     : body.message;
   if (msg) return msg;
   if (status === 429) {
-    return 'Terlalu banyak permintaan reset password. Tunggu ±1 jam (limit email Supabase default) lalu coba lagi.';
+    return 'Terlalu banyak percobaan login. Tunggu ±15 menit lalu coba lagi.';
   }
   if (status === 503) {
     return 'Backend tidak berjalan. Jalankan capexbe di port 3001 (npm run start:dev).';
@@ -290,13 +290,17 @@ export async function fetchAuthMe(): Promise<AuthMeResponse | null> {
   meInFlight = (async () => {
     try {
       const res = await authFetch('/me', { method: 'GET' });
+      if (res.status === 503) {
+        // BE mid-restart (common during dev HMR) — keep session, do not treat as logged out.
+        return null;
+      }
       if (!res.ok) return { authenticated: false };
       const data = (await res.json()) as AuthMeResponse;
       const session = data.user?.session ?? data.session;
       if (session) updateSessionMeta(session);
       return data;
     } catch {
-      return { authenticated: false };
+      return null;
     } finally {
       meInFlight = null;
     }

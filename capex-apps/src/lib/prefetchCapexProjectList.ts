@@ -9,13 +9,8 @@ import {
   readProjectListFilterSelection,
   readProjectListTableCacheAnyAge,
   readProjectListTableShellAnyAge,
-  writeProjectListTableCache,
 } from '@/lib/capexProjectListDiskCache';
-import {
-  buildProjectListServerFilters,
-  isDefaultProjectListServerFilters,
-} from '@/services/projectListQueryTypes';
-import { fetchCapexProjectListQuery } from '@/hooks/queries/fetchCapexProjectListQuery';
+import { fetchCapexProjectListMaster } from '@/hooks/queries/fetchCapexProjectListMaster';
 
 const TABLE_STALE_MS = 5 * 60 * 1000;
 const PREFETCH_TIMEOUT_MS = 8_000;
@@ -61,8 +56,8 @@ export function hydrateCapexProjectListFromDisk(
 }
 
 /**
- * Prefetch halaman tabel pertama (query ringan) — bukan full-bundle chunk.
- * Dipanggil saat hover/nav ke Capex Project List atau login ke halaman tersebut.
+ * Warm disk hydrate + master config only.
+ * Table rows load on screen mount / pagination click (server page-by-page).
  */
 export async function warmCapexProjectListTableCache(
   queryClient: QueryClient,
@@ -82,67 +77,22 @@ export async function warmCapexProjectListTableCache(
   const saved = readProjectListFilterSelection(trimmed);
   const pageSize = saved?.itemsPerPage ?? DEFAULT_PREFETCH_PAGE_SIZE;
   const scopes = defaultScopesForDiskPrefetch();
-  const serverFilters = buildProjectListServerFilters({
-    searchTerm: saved?.searchTerm ?? '',
-    selectedHUs: saved?.selectedHUs ?? [],
-    meetingFilters: {
-      archetype: saved?.meetingArchetype ?? null,
-      assetTypeGroup: saved?.meetingAssetTypeGroup ?? null,
-    },
-    selectedPriorities: saved?.selectedPriorities ?? [],
-    selectedBudgetCategoryIds: saved?.selectedBudgetCategoryIds ?? [],
-    selectedBudgetFilter: saved?.selectedBudgetFilter ?? null,
-    selectedFinishedTasks: saved?.selectedFinishedTasks ?? [],
-    completionRange: {
-      min: saved?.completionMin ?? 0,
-      max: saved?.completionMax ?? 100,
-    },
-    userScopes: scopes,
-  });
   const filtersKey = buildTableFiltersKeyForDisk(trimmed, userId, 1, pageSize, scopes, saved);
-  const qk = queryKeys.capexProjectList.table(trimmed, userId, filtersKey, 1, pageSize);
 
   hydrateCapexProjectListTableFromDisk(queryClient, trimmed, userId, filtersKey, 1, pageSize);
 
-  const existingState = queryClient.getQueryState(qk);
-  if (
-    existingState?.dataUpdatedAt &&
-    Date.now() - existingState.dataUpdatedAt < TABLE_STALE_MS &&
-    queryClient.getQueryData(qk)
-  ) {
-    return;
-  }
-
-  const prefetch = queryClient.prefetchQuery({
-    queryKey: qk,
+  const masterPrefetch = queryClient.prefetchQuery({
+    queryKey: queryKeys.capexProjectList.master(userId),
     staleTime: TABLE_STALE_MS,
-    queryFn: async () => {
-      const bundle = await fetchCapexProjectListQuery(
-        {
-          periodName: trimmed,
-          userId,
-          page: 1,
-          pageSize,
-          skipCache: false,
-          ...serverFilters,
-        },
-        token,
-      );
-      if (bundle) {
-        writeProjectListTableCache(trimmed, userId, filtersKey, 1, pageSize, bundle, {
-          isDefaultView: isDefaultProjectListServerFilters(serverFilters),
-        });
-      }
-      return bundle;
-    },
+    queryFn: () => fetchCapexProjectListMaster(userId, token),
   });
 
   const cap = options?.awaitMs;
   if (cap != null && cap > 0) {
-    await Promise.race([prefetch, new Promise<void>((r) => setTimeout(r, cap))]);
+    await Promise.race([masterPrefetch, new Promise<void>((r) => setTimeout(r, cap))]);
     return;
   }
-  await prefetch;
+  await masterPrefetch;
 }
 
 export function warmCapexProjectListTableCacheWithTimeout(

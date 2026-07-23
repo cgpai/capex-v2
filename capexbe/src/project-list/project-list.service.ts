@@ -17,6 +17,9 @@ import {
   getAllTasks,
   getAllUsers,
   getAllWorkflowSets,
+  getHospitalUnitsConfigSlim,
+  getProjectPrioritiesSlim,
+  getTasksIdNameOnly,
 } from './master-data.loader';
 import {
   canonicalAssetKey,
@@ -43,6 +46,7 @@ import {
 } from './project-list-query.util';
 import { loadProjectListQueryPage } from './project-list-assets-query.loader';
 import { ProjectListCacheService } from './project-list-cache.service';
+import { slimProjectListWirePayload } from './project-list-slim.util';
 
 type MasterListPayload = {
   expiresAt: number;
@@ -54,6 +58,18 @@ type MasterListPayload = {
   prioritiesConfig: any[];
   allTasks: any[];
 };
+
+/** BDD Construction — no users/roles/archetypes directory on the wire. */
+type BddMasterPayload = {
+  expiresAt: number;
+  workflows: any[];
+  hus: any[];
+  prioritiesConfig: any[];
+  allTasks: any[];
+};
+
+const BDD_STATUS_SELECT = 'asset_id, task_id, status, completed_at';
+const BDD_LOG_SELECT = 'asset_id, task_id, completed_at';
 
 @Injectable()
 export class ProjectListService {
@@ -87,10 +103,26 @@ export class ProjectListService {
   private readonly responseCache = new Map<string, { expiresAt: number; data: any }>();
   private readonly inflight = new Map<string, Promise<any>>();
   private readonly masterPayloadByUserId = new Map<number, MasterListPayload>();
+  private bddMasterPayload: BddMasterPayload | null = null;
   private readonly queryInflight = new Map<string, Promise<any>>();
 
   private getCacheKey(userId: number, periodName: string): string {
     return `project-list:${userId}::${periodName}`;
+  }
+
+  /** Shrink wire payload — master via `/project-list/master`; slim rows for table UI. */
+  private slimQueryWirePayload<T extends Record<string, unknown>>(
+    payload: T,
+    query: { page: number; exportAll?: boolean; bddConstructionOnly?: boolean },
+  ): T {
+    if (query.exportAll) {
+      return slimProjectListWirePayload(payload, { keepMaster: true, keepFullRows: true });
+    }
+    if (query.bddConstructionOnly) {
+      if (query.page <= 1) return payload;
+      return slimProjectListWirePayload(payload, { keepFullRows: true });
+    }
+    return slimProjectListWirePayload(payload);
   }
 
   private async assembleBundlePayload(
@@ -183,6 +215,62 @@ export class ProjectListService {
     };
   }
 
+  /** BDD page — slim status/log columns, no users/roles/actionable counts. */
+  private async assembleBddBundlePayload(
+    client: SupabaseClient,
+    rawEnrichedAssets: any[],
+    pageProjects: any[] | undefined,
+    master: BddMasterPayload,
+  ) {
+    const periodAssetIds = rawEnrichedAssets.map((a: any) => String(a.id));
+    const [allStatusesRaw, allTaskLogsRaw] = await Promise.all([
+      periodAssetIds.length
+        ? fetchRecordsByAssetIds(client, 'asset_task_statuses', periodAssetIds, BDD_STATUS_SELECT)
+        : Promise.resolve([]),
+      periodAssetIds.length
+        ? fetchRecordsByAssetIds(client, 'task_logs', periodAssetIds, BDD_LOG_SELECT)
+        : Promise.resolve([]),
+    ]);
+
+    const allStatuses = (allStatusesRaw || []).map(normAssetTaskStatusRow);
+    const allTaskLogs = (allTaskLogsRaw || []).map(normTaskLogRow);
+    const statusesByAsset = groupStatusesByAsset(allStatuses);
+    const logsByAsset = groupLogsByAsset(allTaskLogs);
+
+    const rates = calculateRates(rawEnrichedAssets, master.workflows, statusesByAsset, logsByAsset);
+    const assetLastTaskMap = buildAssetLastTaskMap(
+      rawEnrichedAssets,
+      master.workflows,
+      master.allTasks,
+      logsByAsset,
+      statusesByAsset,
+    );
+
+    const enrichedAssets = rawEnrichedAssets.map((asset: any) => ({
+      ...asset,
+      completionRate: rates.get(canonicalAssetKey(asset.id)) || 0,
+      actionableTaskCount: 0,
+    }));
+
+    const assetLastTaskRecord: Record<string, string> = {};
+    assetLastTaskMap.forEach((v, k) => {
+      assetLastTaskRecord[k] = v;
+    });
+
+    return {
+      enrichedAssets,
+      projects: pageProjects ?? [],
+      workflows: master.workflows,
+      archetypes: [],
+      hus: master.hus,
+      users: [],
+      priorities: master.prioritiesConfig,
+      allRoles: [],
+      allTasks: master.allTasks,
+      assetLastTaskMap: assetLastTaskRecord,
+    };
+  }
+
   private pruneCache() {
     const now = Date.now();
     for (const [k, v] of this.responseCache.entries()) {
@@ -190,6 +278,9 @@ export class ProjectListService {
     }
     for (const [k, v] of this.masterPayloadByUserId.entries()) {
       if (v.expiresAt <= now) this.masterPayloadByUserId.delete(k);
+    }
+    if (this.bddMasterPayload && this.bddMasterPayload.expiresAt <= now) {
+      this.bddMasterPayload = null;
     }
   }
 
@@ -298,9 +389,6 @@ export class ProjectListService {
         hus,
       });
       rawEnrichedAssets = filterRowsByAssignmentScope(rawEnrichedAssets, serverScope);
-      if (paged) {
-        totalAssetCount = rawEnrichedAssets.length;
-      }
 
       const response = await this.assembleBundlePayload(
         client,
@@ -365,11 +453,12 @@ export class ProjectListService {
       'view',
     );
     const cacheKey = projectListQueryCacheKey(query.userId, query.periodName, query);
+    const isBddQuery = query.bddConstructionOnly === true;
 
     const bypassCache = query.skipCache || query.exportAll;
     if (bypassCache) {
       if (query.skipCache) {
-        await this.projectListCache.invalidateForPeriod(query.userId, query.periodName);
+        await this.projectListCache.invalidateQueryPagesForPeriod(query.userId, query.periodName);
       }
       this.queryInflight.delete(cacheKey);
     } else {
@@ -395,50 +484,76 @@ export class ProjectListService {
               `[project-list-query] cache=redis|memory user=${query.userId} period=${query.periodName} total=${cached.totalAssetCount} returned=${cached.enrichedAssets?.length ?? 0} dbTruth=${cached._debug?.dbTruthCount ?? '?'}`,
             );
           }
-          return this.egressBundle(accessToken, query.userId, {
-            ...cached,
-            _debug: { ...cached._debug, cacheLayer: 'redis' },
-          });
+          return isBddQuery
+            ? this.slimQueryWirePayload(cached, query)
+            : this.egressBundle(accessToken, query.userId, {
+                ...this.slimQueryWirePayload(cached, query),
+                _debug: { ...cached._debug, cacheLayer: 'redis' },
+              });
         }
       }
       const inflight = this.queryInflight.get(cacheKey);
       if (inflight) {
-        return inflight.then((payload) => this.egressBundle(accessToken, query.userId, payload));
+        return inflight.then((payload) =>
+          isBddQuery ? payload : this.egressBundle(accessToken, query.userId, payload),
+        );
       }
     }
 
     const run = async () => {
       const { userId } = await this.authContext.getRlsClient(accessToken, query.userId);
       const client = this.authContext.createServiceClient();
-      const master = await this.loadMasterPayload(client, userId);
-      const { rawEnrichedAssets, totalCount, debug } = await loadProjectListQueryPage(client, query, {
-        workflows: master.workflows,
-        archetypes: master.archetypes,
-        hus: master.hus,
-        prioritiesConfig: master.prioritiesConfig,
-        allTasks: master.allTasks,
-        users: master.users,
-      });
-
-      const response = await this.assembleBundlePayload(
+      const master = isBddQuery
+        ? await this.loadBddMasterPayload(client)
+        : await this.loadMasterPayload(client, userId);
+      const { rawEnrichedAssets, totalCount, debug, pageProjects } = await loadProjectListQueryPage(
         client,
-        userId,
-        rawEnrichedAssets,
-        master.workflows,
-        master.archetypes,
-        master.hus,
-        master.allRoles,
-        master.users,
-        master.prioritiesConfig,
-        master.allTasks,
+        query,
+        isBddQuery
+          ? {
+              workflows: master.workflows,
+              archetypes: [],
+              hus: master.hus,
+              prioritiesConfig: master.prioritiesConfig,
+              allTasks: master.allTasks,
+              users: [],
+            }
+          : {
+              workflows: master.workflows,
+              archetypes: (master as MasterListPayload).archetypes,
+              hus: master.hus,
+              prioritiesConfig: master.prioritiesConfig,
+              allTasks: master.allTasks,
+              users: (master as MasterListPayload).users,
+            },
       );
 
-      const payload = {
+      const response = isBddQuery
+        ? await this.assembleBddBundlePayload(
+            client,
+            rawEnrichedAssets,
+            pageProjects,
+            master as BddMasterPayload,
+          )
+        : await this.assembleBundlePayload(
+            client,
+            userId,
+            rawEnrichedAssets,
+            master.workflows,
+            (master as MasterListPayload).archetypes,
+            master.hus,
+            (master as MasterListPayload).allRoles,
+            (master as MasterListPayload).users,
+            master.prioritiesConfig,
+            master.allTasks,
+          );
+
+      const fullPayload = {
         ...response,
         totalAssetCount: totalCount,
         page: query.page,
         pageSize: query.pageSize,
-        _debug: debug,
+        _debug: { ...debug, bddView: isBddQuery },
       };
 
       if (process.env.PERF_CACHE_LOG !== '0') {
@@ -447,10 +562,11 @@ export class ProjectListService {
         );
       }
 
+      const wirePayload = this.slimQueryWirePayload(fullPayload, query);
       if (!query.skipCache && !query.exportAll) {
-        await perfCacheSet(cacheKey, payload, this.projectListCache.getQueryTtlMs());
+        await perfCacheSet(cacheKey, wirePayload, this.projectListCache.getQueryTtlMs());
       }
-      return payload;
+      return wirePayload;
     };
 
     const promise = run();
@@ -459,7 +575,7 @@ export class ProjectListService {
     }
     try {
       const result = await promise;
-      return this.egressBundle(accessToken, query.userId, result);
+      return isBddQuery ? result : this.egressBundle(accessToken, query.userId, result);
     } catch (err: unknown) {
       if (err instanceof UnauthorizedException || err instanceof BadRequestException) {
         throw err;
@@ -483,6 +599,47 @@ export class ProjectListService {
       exportAll: true,
       skipCache: b.skipCache !== false,
     });
+  }
+
+  private async loadBddMasterPayload(client: SupabaseClient): Promise<BddMasterPayload> {
+    if (this.bddMasterPayload && this.bddMasterPayload.expiresAt > Date.now()) {
+      return this.bddMasterPayload;
+    }
+    const [workflows, hus, prioritiesConfig, allTasks] = await Promise.all([
+      getAllWorkflowSets(client),
+      getHospitalUnitsConfigSlim(client),
+      getProjectPrioritiesSlim(client),
+      getTasksIdNameOnly(client),
+    ]);
+    this.bddMasterPayload = {
+      expiresAt: Date.now() + ProjectListService.MASTER_CACHE_TTL_MS,
+      workflows,
+      hus,
+      prioritiesConfig,
+      allTasks,
+    };
+    return this.bddMasterPayload;
+  }
+
+  /** Master config for CPL — cached per user, fetched once separately from table rows. */
+  async loadMasterBundle(accessToken: string, userId: number) {
+    if (!Number.isFinite(userId)) {
+      throw new BadRequestException('Invalid userId');
+    }
+    await this.authZ.assertHierarchyPermission(accessToken, userId, 'Capex Project List', 'view');
+    await this.authContext.getRlsClient(accessToken, userId);
+    const client = this.authContext.createServiceClient();
+    const master = await this.loadMasterPayload(client, userId);
+    const bundle = {
+      workflows: master.workflows,
+      archetypes: master.archetypes,
+      hus: master.hus,
+      users: master.users,
+      priorities: master.prioritiesConfig,
+      allRoles: master.allRoles,
+      allTasks: master.allTasks,
+    };
+    return this.egressBundle(accessToken, userId, bundle);
   }
 
   private async loadMasterPayload(client: SupabaseClient, userId: number): Promise<MasterListPayload & { allRoles: any[] }> {

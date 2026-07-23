@@ -2,6 +2,9 @@ import { fetchCapexProjectListQuery } from '@/hooks/queries/fetchCapexProjectLis
 import type { ProjectListQueryParams } from '@/services/projectListQueryTypes';
 import * as configService from '@/services/configService';
 import type { BddConstructionTableBundle } from '@/lib/bddConstructionDiskCache';
+import { withRequestCache } from '@/lib/requestCache';
+
+const BDD_TAGS_CACHE_TTL_MS = 30 * 60 * 1000;
 
 export async function fetchBddConstructionQueryPage(
   params: ProjectListQueryParams,
@@ -15,7 +18,11 @@ export async function fetchBddConstructionQueryPage(
       },
       accessToken,
     ),
-    configService.getAllAssetTags(),
+    withRequestCache(
+      'app:master:bdd-construction:tags',
+      () => configService.getAllAssetTags(),
+      BDD_TAGS_CACHE_TTL_MS,
+    ),
   ]);
   return {
     ...result,

@@ -19,6 +19,14 @@ export const cacheKeys = {
   },
   budgetHuPeriod: (userId: number, periodName: string) =>
     `app:table:budget-hu:period:${userId}:${normPeriod(periodName)}`,
+  budgetHuPeriodNetwork: (userId: number, periodName: string) =>
+    `app:table:budget-hu:period-network:${userId}:${normPeriod(periodName)}`,
+  budgetHuPeriodNetworkShell: (userId: number, periodName: string) =>
+    `app:table:budget-hu:period-network-shell:${userId}:${normPeriod(periodName)}`,
+  budgetHuPeriodNetworkCategory: (userId: number, periodName: string, categoryId: string) =>
+    `app:table:budget-hu:period-network:${userId}:${normPeriod(periodName)}:cat:${categoryId.trim().toLowerCase()}`,
+  budgetHuPeriodStructure: (userId: number, periodName: string) =>
+    `app:table:budget-hu:period-structure:${userId}:${normPeriod(periodName)}`,
   budgetHuConfig: () => 'app:master:budget-hu:config',
   budgetHuAssetCounts: (userId: number, periodName: string) =>
     `app:table:budget-hu:asset-counts:${userId}:${normPeriod(periodName)}`,
@@ -38,6 +46,12 @@ export const cacheKeys = {
     `app:table:po-update:page:${userId}:${normPeriod(periodName || 'all')}`,
   fsUpdatePage: (userId: number, periodName: string) =>
     `app:table:fs-update:page:${userId}:${normPeriod(periodName)}`,
+  executiveDashboardMetrics: (userId: number, periodName: string, filtersKey: string) =>
+    `app:dashboard:executive:${userId}:${normPeriod(periodName)}:${filtersKey}`,
+  momDailySummary: (userId: number, periodName: string, summaryDate: string) =>
+    `app:table:mom-daily-summary:${userId}:${normPeriod(periodName)}:${summaryDate.trim()}`,
+  bddConstructionScan: (userId: number, periodName: string, filterHash: string) =>
+    `app:table:bdd-construction:scan:${userId}:${normPeriod(periodName)}:${filterHash}`,
 };
 
 const MASTER_CONFIG_SLICES = new Set([

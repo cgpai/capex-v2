@@ -82,7 +82,7 @@ export class FsUpdateService {
   private async loadPageBundleUncached(client: SupabaseClient, periodName: string) {
     const pn = periodName.trim();
     const [period, archetypes, hus, assetTypesRaw, assetTypeGroupsRaw, tasks] = await Promise.all([
-      loadBudgetByPeriodName(client, pn),
+      loadBudgetByPeriodName(client, pn, { fsView: true }),
       getAllArchetypesConfig(client),
       getAllHospitalUnitsConfig(client),
       fetchAllRecords(client, 'asset_type_configs', 'id,name,group_id,is_active'),

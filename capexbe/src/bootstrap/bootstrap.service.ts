@@ -1,9 +1,12 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { fetchAllRecords, toCamelCase } from '../project-list/supabase-helpers';
+import { fetchAllRecords } from '../project-list/supabase-helpers';
 import { getAllRoles, getAllUsers } from '../project-list/master-data.loader';
 import { AuthContextService } from '../auth/auth-context.service';
 import { AuthZService } from '../auth/auth-z.service';
-import { buildMultiYearsFromRows } from '../budget-multi-year/budget-multi-year.util';
+import {
+  buildMultiYearsShellFromRows,
+  buildPeriodSummariesFromRows,
+} from '../budget-multi-year/budget-multi-year.util';
 import { viewerCanLoadUserDirectory, viewerCanSeeUserPii } from '../shared/pii-access.util';
 import { sanitizeRolesForViewer } from '../shared/bootstrap-sanitize.util';
 import { sanitizeUsersForDirectory } from '../shared/response-sanitize.util';
@@ -11,21 +14,6 @@ import { getUserById } from '../project-list/master-data.loader';
 
 const PERIOD_SUMMARY_COLUMNS = 'period_name,multi_year_name,start_date,end_date';
 const MULTI_YEAR_COLUMNS = 'name,start_year,end_year,budget_plan';
-
-function buildPeriodSummaries(periodRows: any[]): any[] {
-  if (!periodRows?.length) return [];
-  return periodRows.map((period) => {
-    const camel = toCamelCase(period) as Record<string, unknown>;
-    return {
-      periodName: String(camel.periodName ?? ''),
-      multiYearName: String(camel.multiYearName ?? ''),
-      startDate: String(camel.startDate ?? ''),
-      endDate: String(camel.endDate ?? ''),
-      budget: {},
-      archetypes: [],
-    };
-  });
-}
 
 @Injectable()
 export class BootstrapService {
@@ -53,12 +41,11 @@ export class BootstrapService {
       ? getAllUsers(client)
       : getUserById(client, userId).then((u) => (u ? [u] : []));
 
-    const [users, roles, multiYearRows, periodRows, categoryBudgets] = await Promise.all([
+    const [users, roles, multiYearRows, periodRows] = await Promise.all([
       usersPromise,
       getAllRoles(client),
       fetchAllRecords(client, 'budget_multi_years', MULTI_YEAR_COLUMNS),
       fetchAllRecords(client, 'budget_periods', PERIOD_SUMMARY_COLUMNS),
-      fetchAllRecords(client, 'budget_period_category_budgets', 'period_name,budget_category_id,budget_plan,budget_carry_forward,budget_allocated,approved_budget,consumed_budget'),
     ]);
 
     const sanitizedUsers = sanitizeUsersForDirectory(
@@ -67,8 +54,8 @@ export class BootstrapService {
       includePii,
     );
     const selfUser = sanitizedUsers.find((u) => Number(u.id) === Number(userId));
-    const multiYears = buildMultiYearsFromRows(multiYearRows, periodRows, categoryBudgets);
-    const periodSummaries = buildPeriodSummaries(periodRows);
+    const multiYears = buildMultiYearsShellFromRows(multiYearRows);
+    const periodSummaries = buildPeriodSummariesFromRows(periodRows);
 
     return {
       users: sanitizedUsers,

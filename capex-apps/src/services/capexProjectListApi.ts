@@ -66,6 +66,63 @@ export interface ProjectListBundle {
   _debug?: ProjectListDebugInfo;
 }
 
+/** Master config — fetched separately from slim table rows. */
+export type ProjectListMasterBundle = Pick<
+  ProjectListBundle,
+  'workflows' | 'archetypes' | 'hus' | 'users' | 'priorities' | 'allRoles' | 'allTasks'
+>;
+
+export function bundleNeedsMaster(bundle: Pick<ProjectListBundle, 'workflows' | 'archetypes'>): boolean {
+  return (bundle.workflows?.length ?? 0) === 0 && (bundle.archetypes?.length ?? 0) === 0;
+}
+
+export function attachMasterToBundle(
+  bundle: ProjectListBundle,
+  master: ProjectListMasterBundle,
+): ProjectListBundle {
+  return { ...bundle, ...master };
+}
+
+/** Master config for Capex Project List (workflows, users, roles, tasks, …). */
+export async function fetchProjectListMaster(
+  userId: number,
+  accessToken?: string | null,
+): Promise<ProjectListMasterBundle> {
+  const bff = useBeBffProxy();
+  if (!bff && !process.env.NEXT_PUBLIC_CAPEXBE_URL?.trim()) {
+    throw new Error('NEXT_PUBLIC_CAPEXBE_URL is not set');
+  }
+  if (!bff && !accessToken) {
+    throw new ProjectListHttpError('Missing authorization', 401);
+  }
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const res = await (bff ? authenticatedFetch : fetch)(capexBeRequestUrl('/project-list/master'), {
+    method: 'POST',
+    headers,
+    credentials: bff ? 'include' : 'same-origin',
+    body: JSON.stringify({ userId }),
+    ...(bff ? { retryOn401: true } : {}),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || `${res.status} ${res.statusText}`;
+    if (text.trim().startsWith('{')) {
+      try {
+        const j = JSON.parse(text) as { message?: string | string[] };
+        const m = j.message;
+        msg = Array.isArray(m) ? m.join('; ') : typeof m === 'string' && m ? m : msg;
+      } catch {
+        /* keep raw */
+      }
+    }
+    throw new ProjectListHttpError(msg, res.status);
+  }
+  return res.json() as Promise<ProjectListMasterBundle>;
+}
+
 /** Aggregated Capex Project List payload from NestJS capexbe (single round-trip). */
 export async function fetchProjectListBundle(
   periodName: string,

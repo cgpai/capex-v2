@@ -6,6 +6,7 @@ interface DropdownProps {
   options: string[];
   selectedValue: string;
   onSelect: (value: string) => void;
+  onOptionHover?: (value: string) => void;
   className?: string;
   placeholder?: string;
 }
@@ -16,7 +17,7 @@ const ChevronDownIcon = () => (
   </svg>
 );
 
-export const Dropdown: React.FC<DropdownProps> = ({ label, options, selectedValue, onSelect, className, placeholder = "Select..." }) => {
+export const Dropdown: React.FC<DropdownProps> = ({ label, options, selectedValue, onSelect, onOptionHover, className, placeholder = "Select..." }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -69,6 +70,8 @@ export const Dropdown: React.FC<DropdownProps> = ({ label, options, selectedValu
               <li key={option}>
                 <button
                   type="button"
+                  onMouseEnter={() => onOptionHover?.(option)}
+                  onFocus={() => onOptionHover?.(option)}
                   onClick={() => handleSelect(option)}
                   className={`
                     w-full text-left px-4 py-2.5 text-sm transition-colors

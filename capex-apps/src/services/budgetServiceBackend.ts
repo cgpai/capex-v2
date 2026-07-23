@@ -68,10 +68,21 @@ export async function readBudgetPeriodStructureFromBackend(
   periodName: string,
   userId?: number | null,
 ): Promise<{ archetypes: BudgetPeriod['archetypes'] } | null | undefined> {
-  const period = await readBudgetPeriodFromBackend(periodName, userId);
-  if (period === undefined) return undefined;
-  if (!period) return null;
-  return { archetypes: period.archetypes ?? [] };
+  const uid = resolveUserId(userId);
+  if (uid == null || !periodName.trim()) return undefined;
+  if (!isCapexBeConfigured()) return undefined;
+  try {
+    const token = await resolveToken();
+    const body = await postToCapexBe<{ archetypes?: BudgetPeriod['archetypes'] }>(
+      '/budget-hu/period-structure',
+      { periodName: periodName.trim(), userId: uid },
+      token,
+    );
+    if (!body?.archetypes) return null;
+    return { archetypes: body.archetypes };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function readBudgetPeriodWithFallback<T>(

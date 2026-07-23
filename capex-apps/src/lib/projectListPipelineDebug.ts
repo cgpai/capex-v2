@@ -1,5 +1,5 @@
 /** Must match capexbe PROJECT_LIST_DATA_POLICY — bump invalidates FE disk caches. */
-export const PROJECT_LIST_DATA_POLICY = 'v7-server-filter-authoritative';
+export const PROJECT_LIST_DATA_POLICY = 'v8-slim-wire-payload';
 
 export const PROJECT_LIST_DISK_CACHE_VERSION = 'capexProjectListTableCache:v2';
 

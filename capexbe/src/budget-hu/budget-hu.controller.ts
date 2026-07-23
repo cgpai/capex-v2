@@ -11,6 +11,12 @@ class BudgetHuBundleBodyDto {
   hospitalUnitId?: string;
   /** Skip master config in payload when FE already has config query. */
   omitConfig?: boolean;
+  /** Budget Network / Siloam: slim projects, skip asset hydration. */
+  networkView?: boolean;
+  /** Budget Network shell — no projects (load category on click). */
+  networkShell?: boolean;
+  /** Budget Network — scope projects to one budget category. */
+  categoryId?: string;
 }
 
 class BudgetHuInvalidateBodyDto {
@@ -116,6 +122,18 @@ export class BudgetHuController {
   async periodOnly(@Req() req: Request, @Body() body: BudgetHuBundleBodyDto) {
     const token = requireAccessTokenFromRequest(req);
     return this.budgetHuService.loadBudgetPeriodOnly(
+      token,
+      this.parseUserId(body),
+      body.periodName,
+      !!body.skipCache,
+      { networkView: !!body.networkView, networkShell: !!body.networkShell, categoryId: body.categoryId },
+    );
+  }
+
+  @Post('period-structure')
+  async periodStructure(@Req() req: Request, @Body() body: BudgetHuBundleBodyDto) {
+    const token = requireAccessTokenFromRequest(req);
+    return this.budgetHuService.loadBudgetPeriodStructure(
       token,
       this.parseUserId(body),
       body.periodName,

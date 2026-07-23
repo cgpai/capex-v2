@@ -1,5 +1,6 @@
 import React, { memo, useMemo } from 'react';
 import { DonutChart } from '../../molecules/DonutChart/DonutChart';
+import { ExecutiveDashboardPanel } from './ExecutiveDashboardPanel';
 import type { ExecutiveDashboardCapexStatus } from '../../../lib/executiveSummary/dashboardTypes';
 import { CAPEX_PIPELINE_COLORS } from '../../../lib/executiveSummary/dashboardTypes';
 
@@ -31,16 +32,12 @@ export const ExecutiveDashboardCapexStatusChart = memo(function ExecutiveDashboa
   const totalAssets = status.assetCount + status.cancelledCount;
 
   return (
-    <div className="h-full flex flex-col">
-      <DonutChart
-        title="Status Pengajuan CAPEX"
-        data={chartData}
-        valueFormatter={(value) => String(value)}
-      />
+    <ExecutiveDashboardPanel title="Status Pengajuan CAPEX">
+      <DonutChart title="Status Pengajuan CAPEX" data={chartData} valueFormatter={(value) => String(value)} embedded />
 
-      <div className="px-6 pb-4 -mt-2 space-y-3">
+      <div className="mt-4 pt-4 border-t border-siloam-border/60 space-y-3 shrink-0">
         {status.assetCount === 0 && status.donutSlices.length > 0 ? (
-          <p className="text-[10px] text-center text-amber-700 font-medium">
+          <p className="text-[11px] text-center text-amber-700 font-medium">
             Distribusi status proyek (belum ada asset terdaftar di periode ini)
           </p>
         ) : null}
@@ -99,6 +96,6 @@ export const ExecutiveDashboardCapexStatusChart = memo(function ExecutiveDashboa
           </p>
         ) : null}
       </div>
-    </div>
+    </ExecutiveDashboardPanel>
   );
 });

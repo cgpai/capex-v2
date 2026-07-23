@@ -74,6 +74,7 @@ export interface BudgetMultiYearPageProps {
 type MultiYearRowProps = {
   my: BudgetMultiYear;
   isExpanded: boolean;
+  isDimmed: boolean;
   canEdit: boolean;
   canCreate: boolean;
   periodsForRow: BudgetPeriod[];
@@ -89,6 +90,7 @@ type MultiYearRowProps = {
 const MultiYearDesktopRow = React.memo<MultiYearRowProps>(function MultiYearDesktopRow({
   my,
   isExpanded,
+  isDimmed,
   canEdit,
   canCreate,
   periodsForRow,
@@ -105,7 +107,7 @@ const MultiYearDesktopRow = React.memo<MultiYearRowProps>(function MultiYearDesk
       <tr
         className={`bg-siloam-surface border-b border-siloam-border last:border-b-0 hover:bg-siloam-bg/50 transition-colors ${
           isExpanded ? 'bg-siloam-bg/30' : ''
-        }`}
+        } ${isDimmed ? 'opacity-45 pointer-events-none' : ''}`}
       >
         <td className="px-4 py-3 text-center">
           <button
@@ -230,6 +232,7 @@ const MultiYearDesktopRow = React.memo<MultiYearRowProps>(function MultiYearDesk
 const MultiYearMobileCard = React.memo<MultiYearRowProps>(function MultiYearMobileCard({
   my,
   isExpanded,
+  isDimmed,
   canEdit,
   canCreate,
   periodsForRow,
@@ -242,7 +245,7 @@ const MultiYearMobileCard = React.memo<MultiYearRowProps>(function MultiYearMobi
   onPeriodBudgetChange,
 }) {
   return (
-    <div className="bg-siloam-surface p-4 rounded-xl border border-siloam-border shadow-sm space-y-4">
+    <div className={`bg-siloam-surface p-4 rounded-xl border border-siloam-border shadow-sm space-y-4 ${isDimmed ? 'opacity-45 pointer-events-none' : ''}`}>
       <div className="flex justify-between items-start">
         <div>
           <h4 className="font-bold text-siloam-text-primary text-lg">{my.name}</h4>
@@ -911,6 +914,7 @@ export const BudgetMultiYearPage = memo(function BudgetMultiYearPage({
                     key={my.name}
                     my={my}
                     isExpanded={expandedRows.has(my.name)}
+                    isDimmed={loadingPeriodBudgetsFor != null && loadingPeriodBudgetsFor !== my.name}
                     canEdit={canEdit}
                     canCreate={canCreate}
                     periodsForRow={periodsByMultiYear.get(my.name) ?? []}
@@ -933,6 +937,7 @@ export const BudgetMultiYearPage = memo(function BudgetMultiYearPage({
                 key={my.name}
                 my={my}
                 isExpanded={expandedRows.has(my.name)}
+                isDimmed={loadingPeriodBudgetsFor != null && loadingPeriodBudgetsFor !== my.name}
                 canEdit={canEdit}
                 canCreate={canCreate}
                 periodsForRow={periodsByMultiYear.get(my.name) ?? []}

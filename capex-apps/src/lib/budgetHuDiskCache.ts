@@ -239,6 +239,79 @@ function mergeHuUnitBudgetPlans(
   }
 }
 
+/**
+ * After Budget Network / Siloam save: keep the richer project/asset tree in App shell,
+ * apply manual budget plan edits from the slim network payload.
+ */
+export function foldNetworkBudgetSaveIntoAppPeriod(
+  existing: BudgetPeriod,
+  saved: BudgetPeriod,
+): BudgetPeriod {
+  const periodName = saved.periodName.trim();
+  const categoryIds = Array.from(
+    new Set([...Object.keys(existing.budget ?? {}), ...Object.keys(saved.budget ?? {})]),
+  );
+
+  const merged =
+    mergeRicherBudgetPeriods(periodName, existing, saved) ??
+    (JSON.parse(JSON.stringify(existing)) as BudgetPeriod);
+  const result = JSON.parse(JSON.stringify(merged)) as BudgetPeriod;
+
+  for (const catId of categoryIds) {
+    const savedPlan = saved.budget?.[catId]?.budgetPlan;
+    if (savedPlan === undefined) continue;
+    if (!result.budget[catId]) {
+      result.budget[catId] = {
+        budgetPlan: 0,
+        budgetCarryForward: 0,
+        budgetAllocated: 0,
+        approvedBudget: 0,
+        consumedBudget: 0,
+      };
+    }
+    result.budget[catId].budgetPlan = savedPlan;
+  }
+
+  for (const savedArch of saved.archetypes) {
+    const targetArch = result.archetypes.find((a) => a.id === savedArch.id);
+    if (!targetArch) continue;
+    for (const catId of categoryIds) {
+      const savedPlan = savedArch.budget?.[catId]?.budgetPlan;
+      if (savedPlan === undefined) continue;
+      if (!targetArch.budget[catId]) {
+        targetArch.budget[catId] = {
+          budgetPlan: 0,
+          budgetCarryForward: 0,
+          budgetAllocated: 0,
+          approvedBudget: 0,
+          consumedBudget: 0,
+        };
+      }
+      targetArch.budget[catId].budgetPlan = savedPlan;
+    }
+    for (const savedHu of savedArch.units) {
+      const targetHu = targetArch.units.find((u) => u.id === savedHu.id);
+      if (!targetHu) continue;
+      for (const catId of categoryIds) {
+        const savedPlan = savedHu.budget?.[catId]?.budgetPlan;
+        if (savedPlan === undefined) continue;
+        if (!targetHu.budget[catId]) {
+          targetHu.budget[catId] = {
+            budgetPlan: 0,
+            budgetCarryForward: 0,
+            budgetAllocated: 0,
+            approvedBudget: 0,
+            consumedBudget: 0,
+          };
+        }
+        targetHu.budget[catId].budgetPlan = savedPlan;
+      }
+    }
+  }
+
+  return result;
+}
+
 /** Merge periods — per HU keep whichever source has more projects. Also union missing HUs. */
 export function mergeRicherBudgetPeriods(
   periodName: string,

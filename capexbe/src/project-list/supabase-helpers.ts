@@ -125,7 +125,7 @@ export async function fetchAssetsByCodes(
 }
 
 const PO_MIGRATION_ASSET_SELECT =
-  'id, asset_code, asset_name, description, project_id, budget_plan, budget_allocated, consumed_budget, workflow_set_id, budget_category_id, end_target_date, catalogue_id, po_number, cpr_id, po_date, is_goods_received, bdd_priority, asset_type_id, qty, received_qty, lifecycle_status';
+  'id, asset_code, asset_name, description, project_id, budget_plan, budget_allocated, consumed_budget, workflow_set_id, budget_category_id, end_target_date, catalogue_id, po_number, po_date, is_goods_received, bdd_priority, asset_type_id, qty, received_qty, lifecycle_status';
 
 /** Lookup asset untuk migrasi PO — baris lengkap untuk upsert batch. */
 export async function fetchAssetsByCodesForPoMigration(

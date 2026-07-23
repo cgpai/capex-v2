@@ -1,5 +1,6 @@
 # CAPEX monorepo — local dev shortcuts
-# Usage: make setup && make run
+# Usage: ./run setup && ./run   (Mac + Windows PowerShell 7+)
+#        make setup && make run (Mac/Linux, requires make)
 
 BE_DIR   := capexbe
 FE_DIR   := capex-apps
@@ -10,6 +11,7 @@ FE_PORT  := 3000
 
 help:
 	@echo "CAPEX dev commands:"
+	@echo "  ./run           Start backend (:$(BE_PORT)) + frontend (:$(FE_PORT)) [Mac/Win]"
 	@echo "  make setup      Copy env templates + npm install (first time)"
 	@echo "  make install    npm install in backend + frontend"
 	@echo "  make env        Copy .env.example → .env / .env.local (skip if exists)"
@@ -112,8 +114,8 @@ tunnel-help:
 	@./scripts/cursor-tunnel-help.sh
 
 tunnel-cf:
-	@chmod +x scripts/start-cloudflared-tunnel.sh
-	@./scripts/start-cloudflared-tunnel.sh 3000
+	@chmod +x scripts/start-public-tunnel.sh
+	@./scripts/start-public-tunnel.sh 3000
 
 run-tunnel-demo:
 	@chmod +x scripts/run-tunnel-demo.sh

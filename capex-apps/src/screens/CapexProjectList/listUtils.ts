@@ -853,7 +853,8 @@ export function enrichedAssetsMatchPanelFilters(
     if (assets.some((a) => !huSet.has(normFilterName(a.huName)))) return false;
   }
 
-  if (filters.selectedPriorities.length > 0 && maps) {
+  if (filters.selectedPriorities.length > 0) {
+    if (!maps) return false;
     const prioritySet = new Set(filters.selectedPriorities.map((p) => normFilterName(p)));
     if (
       assets.some((a) => {
@@ -865,7 +866,8 @@ export function enrichedAssetsMatchPanelFilters(
     }
   }
 
-  if (filters.selectedBudgetCategoryIds.length > 0 && maps) {
+  if (filters.selectedBudgetCategoryIds.length > 0) {
+    if (!maps) return false;
     const categorySet = new Set(filters.selectedBudgetCategoryIds.map(String));
     if (
       assets.some((a) => {
@@ -878,7 +880,8 @@ export function enrichedAssetsMatchPanelFilters(
     }
   }
 
-  if (filters.selectedBudgetFilter && maps) {
+  if (filters.selectedBudgetFilter) {
+    if (!maps) return false;
     if (
       assets.some((a) => {
         const projectBudget = maps.projectBudgetMap.get(String(a.projectId)) || 0;
@@ -891,7 +894,8 @@ export function enrichedAssetsMatchPanelFilters(
     }
   }
 
-  if (filters.selectedFinishedTasks.length > 0 && assetLastTaskMap) {
+  if (filters.selectedFinishedTasks.length > 0) {
+    if (!assetLastTaskMap) return false;
     const finishedSet = new Set(filters.selectedFinishedTasks);
     if (
       assets.some((a) => {

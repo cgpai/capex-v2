@@ -20,6 +20,17 @@ export class ProjectListCacheService {
 
   /** Drop in-process + Redis caches for one user/period (call after INSERT/UPDATE/DELETE). */
   async invalidateForPeriod(userId: number, periodName: string): Promise<void> {
+    await this.invalidateQueryPagesForPeriod(userId, periodName);
+    await this.invalidateBddScanForPeriod(userId, periodName);
+    if (process.env.PERF_CACHE_LOG !== '0') {
+      console.info(
+        `[project-list-cache] invalidate user=${userId} period=${periodName} keys=bundle+query-prefix+bdd-scan`,
+      );
+    }
+  }
+
+  /** Page/query caches only — keeps BDD scan cache for skipCache refetches. */
+  async invalidateQueryPagesForPeriod(userId: number, periodName: string): Promise<void> {
     const pn = this.normPeriod(periodName);
     const bundleKey = this.fullBundleKey(userId, periodName);
     this.responseCache.delete(bundleKey);
@@ -27,11 +38,11 @@ export class ProjectListCacheService {
     await perfCacheDelete(bundleKey);
     await perfCacheDeleteByPrefix(`app:table:project-list:query:${userId}:${pn}:`);
     await perfCacheDeleteByPrefix(`app:table:project-list:page:${userId}:${pn}:`);
-    if (process.env.PERF_CACHE_LOG !== '0') {
-      console.info(
-        `[project-list-cache] invalidate user=${userId} period=${periodName} keys=bundle+query-prefix`,
-      );
-    }
+  }
+
+  async invalidateBddScanForPeriod(userId: number, periodName: string): Promise<void> {
+    const pn = this.normPeriod(periodName);
+    await perfCacheDeleteByPrefix(`app:table:bdd-construction:scan:${userId}:${pn}:`);
   }
 
   /** Invalidate all periods for a user (e.g. task update when period unknown). */

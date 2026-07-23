@@ -56,8 +56,13 @@ export const queryKeys = {
       ['screen', 'budget-multi-year', 'period-budgets', multiYearName] as const,
   },
   budgetSiloamPeriod: {
-    /** Pohon BudgetPeriod per periode — dipakai Siloam + Archetype (cache bersama). */
-    detail: (periodName: string) => ['screen', 'budget-siloam-period', periodName] as const,
+    /** Network shell — structure + period totals, no projects. */
+    shell: (periodName: string) => ['screen', 'budget-siloam-period', 'shell', periodName] as const,
+    /** Per-category project aggregates (on tab click). */
+    category: (periodName: string, categoryId: string) =>
+      ['screen', 'budget-siloam-period', 'category', periodName, categoryId] as const,
+    /** @deprecated alias — shell query */
+    detail: (periodName: string) => ['screen', 'budget-siloam-period', 'shell', periodName] as const,
   },
   budgetHu: {
     page: (periodName: string, userId: number, hospitalUnitId?: string | null) =>
@@ -91,6 +96,7 @@ export const queryKeys = {
   },
   capexProjectList: {
     bundle: (periodName: string, userId: number) => ['screen', 'capex-project-list', periodName, userId] as const,
+    master: (userId: number) => ['screen', 'capex-project-list', 'master', userId] as const,
     table: (periodName: string, userId: number, filtersKey: string, page: number, pageSize: number) =>
       ['screen', 'capex-project-list', 'table', periodName, userId, filtersKey, page, pageSize] as const,
   },

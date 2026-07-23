@@ -111,7 +111,7 @@ export async function loadFsPeriodContext(
 ): Promise<{ period: any | null; categories: any[]; studies: any[] }> {
   const pn = periodName.trim();
   const [period, categoriesRaw] = await Promise.all([
-    loadBudgetByPeriodName(client, pn),
+    loadBudgetByPeriodName(client, pn, { fsView: true }),
     fetchAllRecords(client, 'budget_category_configs', '*'),
   ]);
   const projectIds: string[] = [];

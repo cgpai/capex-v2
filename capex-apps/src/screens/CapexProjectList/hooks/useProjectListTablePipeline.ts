@@ -10,7 +10,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
-import type { EnrichedAsset, Project, User } from '../../../types';
+import type { EnrichedAsset, Project, ProjectPriorityConfig, User } from '../../../types';
 import {
   isProjectListUnauthorizedError,
   readProjectListCacheAnyAge,
@@ -84,6 +84,9 @@ import type { MeetingFilters } from './useProjectListFilterState';
 export const FILTERED_TABLE_STALE_MS = 90_000;
 export const DEFAULT_TABLE_STALE_MS = 5 * 60 * 1000;
 
+/** Server-side pagination only — no background full-period warm (keeps CPL light). */
+const CPL_SERVER_PAGE_ONLY = true;
+
 export type ProjectListTablePipelineConfig = {
   queryClient: QueryClient;
   currentUser: User | null;
@@ -105,8 +108,7 @@ export type ProjectListTablePipelineConfig = {
   isMultiPeriodView: boolean;
   hasPeriodSubsetFilter: boolean;
 
-  debouncedSearchTerm: string;
-  deferredClientSearchTerm: string;
+  appliedSearchTerm: string;
   searchTerm: string;
   isSearchActive: boolean;
   isSearchStaging: boolean;
@@ -126,6 +128,7 @@ export type ProjectListTablePipelineConfig = {
 
   assetTypeGroupMaster: AssetTypeGroupMasterMaps;
   archetypeByHuName: Map<string, string>;
+  masterPriorities: ProjectPriorityConfig[];
 
   applyMasterFromSource: (source: ListSource) => void;
   masterDataHydratedRef: MutableRefObject<boolean>;
@@ -173,6 +176,7 @@ export type ProjectListTablePipeline = {
   hasTableOnDisk: boolean;
   isBackgroundRefresh: boolean;
   isFilterRefreshing: boolean;
+  isPageTransition: boolean;
 
   sourceDataRef: MutableRefObject<ListSource | null>;
   clientFilterPoolRef: MutableRefObject<{ periodKey: string; source: ListSource } | null>;
@@ -184,6 +188,7 @@ export type ProjectListTablePipeline = {
   mustRefetchTableRef: MutableRefObject<boolean>;
 
   clearTableRows: (opts?: { keepTotal?: boolean }) => void;
+  resetTableForFilterChange: () => void;
   resetAppliedTableCacheKeys: () => void;
   setClientFilterPoolReady: Dispatch<SetStateAction<boolean>>;
   resetTablePipelineForPeriodChange: () => void;
@@ -210,8 +215,7 @@ export function useProjectListTablePipeline(
     primaryPeriodName,
     isMultiPeriodView,
     hasPeriodSubsetFilter,
-    debouncedSearchTerm,
-    deferredClientSearchTerm,
+    appliedSearchTerm,
     searchTerm,
     isSearchActive,
     isSearchStaging,
@@ -230,6 +234,7 @@ export function useProjectListTablePipeline(
     itemsPerPage,
     assetTypeGroupMaster,
     archetypeByHuName,
+    masterPriorities,
     applyMasterFromSource,
     masterDataHydratedRef,
     showToastRef,
@@ -267,7 +272,7 @@ export function useProjectListTablePipeline(
   );
 
   const activateClientPoolFromCache = useCallback((periodKey: string): boolean => {
-    if (!periodKey) return false;
+    if (CPL_SERVER_PAGE_ONLY || !periodKey) return false;
     const cached = clientFilterPoolByPeriodRef.current.get(periodKey);
     if (!cached || !isCompleteListSource(cached)) return false;
     clientFilterPoolRef.current = { periodKey, source: cached };
@@ -332,9 +337,18 @@ export function useProjectListTablePipeline(
 
   const restoreClientPoolFromSession = useCallback(
     (periodKey: string): boolean => {
+      if (CPL_SERVER_PAGE_ONLY) return false;
       if (!currentUser?.id || !periodKey.trim() || effectivePeriods.length > 1) return false;
+      const active = clientFilterPoolRef.current;
+      if (
+        active?.periodKey === periodKey &&
+        isCompleteListSource(active.source)
+      ) {
+        if (!clientFilterPoolReady) setClientFilterPoolReady(true);
+        return true;
+      }
       const session = getSessionClientPool(currentUser.id, periodKey);
-      if (!session) return false;
+      if (!session || !isCompleteListSource(session)) return false;
       clientFilterPoolRef.current = { periodKey, source: session };
       clientFilterPoolByPeriodRef.current.set(periodKey, session);
       sourceDataRef.current = session;
@@ -342,10 +356,22 @@ export function useProjectListTablePipeline(
       setClientPoolRevision((n) => n + 1);
       return true;
     },
-    [currentUser?.id, effectivePeriods.length],
+    [currentUser?.id, effectivePeriods.length, clientFilterPoolReady],
   );
 
   const hasMeetingSlicers = Boolean(meetingFilters.archetype || meetingFilters.assetTypeGroup);
+
+  const hasProgressPanelFilters = useMemo(
+    () =>
+      selectedFinishedTasks.length > 0 ||
+      completionRange.min > 0 ||
+      completionRange.max < 100,
+    [
+      selectedFinishedTasks.join('\u0001'),
+      completionRange.min,
+      completionRange.max,
+    ],
+  );
 
   const hasPanelTableFilters = useMemo(
     () =>
@@ -376,7 +402,7 @@ export function useProjectListTablePipeline(
   const serverFilters = useMemo(
     () =>
       buildProjectListServerFilters({
-        searchTerm: debouncedSearchTerm,
+        searchTerm: appliedSearchTerm,
         selectedHUs,
         meetingFilters,
         selectedPriorities,
@@ -392,7 +418,7 @@ export function useProjectListTablePipeline(
     [
       userScopesReady,
       listUserScopes,
-      debouncedSearchTerm,
+      appliedSearchTerm,
       selectedHUs.join('\u0001'),
       meetingFilters.archetype,
       meetingFilters.assetTypeGroup,
@@ -417,12 +443,23 @@ export function useProjectListTablePipeline(
   }, [clientFilterPoolReady, isMultiPeriodView, queryPeriodKey, clientPoolRevision]);
 
   /**
-   * Multi-period → server merge. Single-period → client pool when warm (all filters accurate).
-   * Cold pool → server paginated fetch until background warm completes.
+   * Multi-period, network/asset-group, progress, and search → server (authoritative).
+   * Single-period HU/priority/budget only → client pool when warm.
    */
   const needsPanelServerFetch = useMemo(
-    () => isMultiPeriodView || !poolReadyForInstantPanelFilters,
-    [isMultiPeriodView, poolReadyForInstantPanelFilters],
+    () =>
+      isMultiPeriodView ||
+      hasMeetingSlicers ||
+      hasProgressPanelFilters ||
+      isSearchActive ||
+      !poolReadyForInstantPanelFilters,
+    [
+      isMultiPeriodView,
+      hasMeetingSlicers,
+      hasProgressPanelFilters,
+      isSearchActive,
+      poolReadyForInstantPanelFilters,
+    ],
   );
 
   const tableQueryFilters = serverFilters;
@@ -454,6 +491,7 @@ export function useProjectListTablePipeline(
 
   const mustRefetchTableRef = useRef(false);
   const hadActiveFiltersOnMountRef = useRef(hasActiveTableFilters);
+  const mountFilterClearAppliedRef = useRef(false);
 
   const tryResolveTableBundleFromCache = useCallback(
     (page: number, pageSize: number, key: string): ProjectListBundle | null => {
@@ -574,7 +612,11 @@ export function useProjectListTablePipeline(
       if (!hasPanelTableFilters) return true;
       const assets = dedupeEnrichedAssetsById(bundle.enrichedAssets);
       if (assets.length === 0) return true;
-      const maps = buildAssetFilterMaps(bundle.projects, bundle.priorities);
+      const maps = buildAssetFilterMaps(
+        bundle.projects,
+        (bundle.priorities?.length ?? 0) > 0 ? bundle.priorities : masterPriorities,
+        assets,
+      );
       const lastMap = new Map(
         Object.entries(bundle.assetLastTaskMap ?? {}).map(
           ([k, v]) => [normAssetKey(k), v] as [string, string],
@@ -589,7 +631,7 @@ export function useProjectListTablePipeline(
           selectedBudgetFilter,
           selectedBudgetCategoryIds,
           completionRange,
-          searchLower: debouncedSearchTerm.trim().toLowerCase(),
+          searchLower: appliedSearchTerm.trim().toLowerCase(),
         },
         maps,
         lastMap,
@@ -605,8 +647,9 @@ export function useProjectListTablePipeline(
       selectedBudgetCategoryIds.join('\u0001'),
       completionRange.min,
       completionRange.max,
-      debouncedSearchTerm,
+      appliedSearchTerm,
       archetypeByHuName,
+      masterPriorities,
     ],
   );
 
@@ -677,7 +720,9 @@ export function useProjectListTablePipeline(
             ? source.totalAssetCount
             : scopedBundle.totalAssetCount,
       };
-      const shouldHydrateMaster = opts?.hydrateMaster ?? !masterDataHydratedRef.current;
+      const shouldHydrateMaster =
+        (opts?.hydrateMaster ?? !masterDataHydratedRef.current) &&
+        (source.workflows?.length ?? 0) > 0;
       if (shouldHydrateMaster) {
         applyMasterFromSource(source);
       }
@@ -711,17 +756,21 @@ export function useProjectListTablePipeline(
   }, [clientFilterPoolReady, isMultiPeriodView, queryPeriodKey, clientPoolRevision]);
 
   const [diskTableSeed, setDiskTableSeed] = useState<ProjectListBundle | undefined>(undefined);
+  const lastDiskTableSeedKeyRef = useRef('');
 
   useLayoutEffect(() => {
     if (mustRefetchTableRef.current || isMultiPeriodView) {
+      lastDiskTableSeedKeyRef.current = '';
       setDiskTableSeed(undefined);
       return;
     }
     if (clientFilterCanServe && !needsPanelServerFetch) {
+      lastDiskTableSeedKeyRef.current = '';
       setDiskTableSeed(undefined);
       return;
     }
     if (!currentUser || !primaryPeriodName.trim() || !filtersKey) {
+      lastDiskTableSeedKeyRef.current = '';
       setDiskTableSeed(undefined);
       return;
     }
@@ -736,9 +785,15 @@ export function useProjectListTablePipeline(
     );
     const cached = tryResolveTableBundleFromCache(currentPage, itemsPerPage, filtersKey) ?? undefined;
     if (cached && hasActiveTableFilters && !bundleMatchesTableFilters(cached)) {
+      lastDiskTableSeedKeyRef.current = '';
       setDiskTableSeed(undefined);
       return;
     }
+    const seedKey = cached
+      ? `${filtersKey}\u0004${currentPage}\u0004${itemsPerPage}\u0004${bundleRowsCacheKey(cached.enrichedAssets)}`
+      : '';
+    if (seedKey === lastDiskTableSeedKeyRef.current) return;
+    lastDiskTableSeedKeyRef.current = seedKey;
     setDiskTableSeed(cached);
   }, [
     currentUser?.id,
@@ -755,6 +810,7 @@ export function useProjectListTablePipeline(
     queryClient,
     tryResolveTableBundleFromCache,
     bundleMatchesTableFilters,
+    bundleRowsCacheKey,
   ]);
 
   const mayUseDiskSeed =
@@ -765,7 +821,7 @@ export function useProjectListTablePipeline(
 
   const clientListFilters = useMemo(
     () => ({
-      searchLower: deferredClientSearchTerm.trim().toLowerCase(),
+      searchLower: appliedSearchTerm.trim().toLowerCase(),
       selectedHUs,
       selectedPriorities,
       selectedFinishedTasks,
@@ -780,7 +836,7 @@ export function useProjectListTablePipeline(
       archetypeByHuName: clientFilterArchetypeByHuName,
     }),
     [
-      deferredClientSearchTerm,
+      appliedSearchTerm,
       selectedHUs.join('\u0001'),
       selectedPriorities.join('\u0001'),
       selectedFinishedTasks.join('\u0001'),
@@ -837,8 +893,18 @@ export function useProjectListTablePipeline(
     }
   }, []);
 
+  const resetTableForFilterChange = useCallback(() => {
+    setCurrentPage(1);
+    lastAppliedFiltersKeyRef.current = '';
+    lastAppliedRowIdsRef.current = '';
+    setTableRowsFiltersKey('');
+    mustRefetchTableRef.current = true;
+    clearTableRows();
+  }, [setCurrentPage, clearTableRows]);
+
   useLayoutEffect(() => {
-    if (!hadActiveFiltersOnMountRef.current) return;
+    if (!hadActiveFiltersOnMountRef.current || mountFilterClearAppliedRef.current) return;
+    mountFilterClearAppliedRef.current = true;
     mustRefetchTableRef.current = true;
     clearTableRows();
   }, [clearTableRows]);
@@ -969,7 +1035,7 @@ export function useProjectListTablePipeline(
       isCompleteProjectListBundle(legacyBundle) &&
       !isStaleProjectListBundle(legacyBundle.totalAssetCount, legacyBundle._debug);
 
-    if (legacyComplete) {
+    if (legacyComplete && !CPL_SERVER_PAGE_ONLY) {
       const seeded = sealCompleteListSource(projectListBundleToListSource(legacyBundle));
       const scopedSeeded = scopeListSourceToUser(seeded, userScopesRef.current, {
         ready: userScopesReadyRef.current,
@@ -985,101 +1051,134 @@ export function useProjectListTablePipeline(
       };
     }
 
+    if (hasActiveTableFilters || CPL_SERVER_PAGE_ONLY) {
+      return;
+    }
+
     clientFilterPoolRef.current = null;
     setClientFilterPoolReady(false);
     setClientPoolWarmFailed(false);
 
     const abort = new AbortController();
-    void (async () => {
-      try {
-        const bff = useBeBffProxy();
-        let token: string | null = null;
-        if (!bff || !useBackendSession()) {
-          token = await getAccessTokenForBackend();
-          if (!bff && !token) return;
-        }
-        const defaultFilters = buildProjectListServerFilters({
-          searchTerm: '',
-          selectedHUs: [],
-          meetingFilters: { archetype: null, assetTypeGroup: null },
-          selectedPriorities: [],
-          selectedBudgetCategoryIds: [],
-          selectedBudgetFilter: null,
-          selectedFinishedTasks: [],
-          completionRange: { min: 0, max: 100 },
-          userScopes: userScopesReadyRef.current
-            ? {
-                all: userScopesRef.current.all,
-                hus: userScopesRef.current.hus,
-                archetypes: userScopesRef.current.archetypes,
-              }
-            : { all: false, hus: new Set<string>(), archetypes: new Set<string>() },
-          sortBy: DEFAULT_PROJECT_LIST_SORT,
-        });
-        const full = await warmProjectListClientPool(
-          {
-            periodName: primaryPeriodName,
-            userId: currentUser.id,
-            ...defaultFilters,
-            skipCache: false,
-          },
-          token,
-          abort.signal,
-        );
-        if (cancelled || abort.signal.aborted) return;
-        const warmTotal =
-          typeof full.meta.totalAssetCount === 'number'
-            ? full.meta.totalAssetCount
-            : full.enrichedAssets.length;
-        const source = sealCompleteListSource(
-          projectListBundleToListSource({
+    let idleHandle: number | undefined;
+    let deferTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const runWarm = () => {
+      if (cancelled || abort.signal.aborted) return;
+      void (async () => {
+        try {
+          const bff = useBeBffProxy();
+          let token: string | null = null;
+          if (!bff || !useBackendSession()) {
+            token = await getAccessTokenForBackend();
+            if (!bff && !token) return;
+          }
+          const defaultFilters = buildProjectListServerFilters({
+            searchTerm: '',
+            selectedHUs: [],
+            meetingFilters: { archetype: null, assetTypeGroup: null },
+            selectedPriorities: [],
+            selectedBudgetCategoryIds: [],
+            selectedBudgetFilter: null,
+            selectedFinishedTasks: [],
+            completionRange: { min: 0, max: 100 },
+            userScopes: userScopesReadyRef.current
+              ? {
+                  all: userScopesRef.current.all,
+                  hus: userScopesRef.current.hus,
+                  archetypes: userScopesRef.current.archetypes,
+                }
+              : { all: false, hus: new Set<string>(), archetypes: new Set<string>() },
+            sortBy: DEFAULT_PROJECT_LIST_SORT,
+          });
+          const full = await warmProjectListClientPool(
+            {
+              periodName: primaryPeriodName,
+              userId: currentUser.id,
+              ...defaultFilters,
+              skipCache: false,
+            },
+            token,
+            abort.signal,
+          );
+          if (cancelled || abort.signal.aborted) return;
+          const warmTotal =
+            typeof full.meta.totalAssetCount === 'number'
+              ? full.meta.totalAssetCount
+              : full.enrichedAssets.length;
+          const source = sealCompleteListSource(
+            projectListBundleToListSource({
+              ...full.meta,
+              enrichedAssets: full.enrichedAssets,
+              projects: full.projects,
+              assetLastTaskMap: full.assetLastTaskMap,
+              totalAssetCount: warmTotal,
+            }),
+          );
+          if (!isCompleteListSource(source)) {
+            if (!cancelled && !abort.signal.aborted) {
+              setClientPoolWarmFailed(true);
+            }
+            return;
+          }
+          const scopedSource = sealCompleteListSource(
+            scopeListSourceToUser(source, userScopesRef.current, {
+              ready: userScopesReadyRef.current,
+            }),
+          );
+          clientFilterPoolRef.current = { periodKey: poolKey, source: scopedSource };
+          persistCompleteClientPool(poolKey, source);
+          sourceDataRef.current = scopedSource;
+          setClientFilterPoolReady(true);
+          setClientPoolRevision((n) => n + 1);
+          setClientPoolWarmFailed(false);
+          writeProjectListCache(primaryPeriodName, currentUser.id, {
             ...full.meta,
             enrichedAssets: full.enrichedAssets,
             projects: full.projects,
             assetLastTaskMap: full.assetLastTaskMap,
             totalAssetCount: warmTotal,
-          }),
-        );
-        if (!isCompleteListSource(source)) {
-          if (!cancelled && !abort.signal.aborted) {
-            setClientPoolWarmFailed(true);
-          }
-          return;
+          });
+          logProjectListPipelineStage('client-filter-pool-ready', {
+            periodKey: poolKey,
+            rowCount: full.enrichedAssets.length,
+            totalAssetCount: warmTotal,
+          });
+        } catch (err) {
+          if (cancelled || abort.signal.aborted) return;
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          console.warn('Capex project list client filter pool warm failed:', err);
+          setClientPoolWarmFailed(true);
         }
-        const scopedSource = sealCompleteListSource(
-          scopeListSourceToUser(source, userScopesRef.current, {
-            ready: userScopesReadyRef.current,
-          }),
-        );
-        clientFilterPoolRef.current = { periodKey: poolKey, source: scopedSource };
-        persistCompleteClientPool(poolKey, source);
-        sourceDataRef.current = scopedSource;
-        setClientFilterPoolReady(true);
-        setClientPoolRevision((n) => n + 1);
-        setClientPoolWarmFailed(false);
-        writeProjectListCache(primaryPeriodName, currentUser.id, {
-          ...full.meta,
-          enrichedAssets: full.enrichedAssets,
-          projects: full.projects,
-          assetLastTaskMap: full.assetLastTaskMap,
-          totalAssetCount: warmTotal,
-        });
-        logProjectListPipelineStage('client-filter-pool-ready', {
-          periodKey: poolKey,
-          rowCount: full.enrichedAssets.length,
-          totalAssetCount: warmTotal,
-        });
-      } catch (err) {
-        if (cancelled || abort.signal.aborted) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        console.warn('Capex project list client filter pool warm failed:', err);
-        setClientPoolWarmFailed(true);
+      })();
+    };
+
+    const scheduleWarm = () => {
+      if (typeof window === 'undefined') {
+        deferTimer = setTimeout(runWarm, 5000);
+        return;
       }
-    })();
+      const w = window as Window & {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+        cancelIdleCallback?: (id: number) => void;
+      };
+      if (w.requestIdleCallback) {
+        idleHandle = w.requestIdleCallback(runWarm, { timeout: 12_000 });
+      } else {
+        deferTimer = setTimeout(runWarm, 5000);
+      }
+    };
+
+    scheduleWarm();
 
     return () => {
       cancelled = true;
       abort.abort();
+      if (typeof window !== 'undefined') {
+        const w = window as Window & { cancelIdleCallback?: (id: number) => void };
+        if (idleHandle != null && w.cancelIdleCallback) w.cancelIdleCallback(idleHandle);
+      }
+      if (deferTimer) clearTimeout(deferTimer);
     };
   }, [
     currentUser?.id,
@@ -1087,6 +1186,7 @@ export function useProjectListTablePipeline(
     queryPeriodKey,
     primaryPeriodName,
     isMultiPeriodView,
+    hasActiveTableFilters,
     capexBeUrl,
     persistCompleteClientPool,
     activateClientPoolFromCache,
@@ -1117,14 +1217,10 @@ export function useProjectListTablePipeline(
     lastAppliedRowIdsRef.current = '';
     setTableRowsFiltersKey('');
     mustRefetchTableRef.current = true;
-
-    if (needsPanelServerFetch) {
-      clearTableRows({ keepTotal: true });
-    }
+    clearTableRows();
   }, [
     meetingFilters.archetype,
     meetingFilters.assetTypeGroup,
-    needsPanelServerFetch,
     setCurrentPage,
     clearTableRows,
   ]);
@@ -1140,14 +1236,9 @@ export function useProjectListTablePipeline(
     lastAppliedRowIdsRef.current = '';
     setTableRowsFiltersKey('');
     mustRefetchTableRef.current = true;
-
-    if (needsPanelServerFetch) {
-      clearTableRows({ keepTotal: true });
-    }
+    clearTableRows();
   }, [
     panelFiltersKey,
-    needsPanelServerFetch,
-    poolReadyForInstantPanelFilters,
     setCurrentPage,
     clearTableRows,
     prevPanelFiltersKeyRef,
@@ -1171,7 +1262,9 @@ export function useProjectListTablePipeline(
     if (!listFiltersKey || filtersKeyWithoutPageRef.current === listFiltersKey) return;
     const hadPriorKey = filtersKeyWithoutPageRef.current !== '';
     filtersKeyWithoutPageRef.current = listFiltersKey;
-    setCurrentPage(1);
+    if (hadPriorKey) {
+      setCurrentPage(1);
+    }
     lastAppliedFiltersKeyRef.current = '';
     lastAppliedRowIdsRef.current = '';
     if (!hadPriorKey || !currentUser || !queryPeriodKey) return;
@@ -1402,12 +1495,18 @@ export function useProjectListTablePipeline(
     tableQuery.isFetching &&
     !tableQuery.isPending &&
     !isSearchStaging &&
-    !hasPanelTableFilters;
+    !hasPanelTableFilters &&
+    !isPageTransition;
+
+  const isPageTransition =
+    needsPanelServerFetch &&
+    Boolean(tableDisplayKey) &&
+    tableRowsFiltersKey !== tableDisplayKey &&
+    (tableQuery.isFetching || tableQuery.isPending);
 
   const isFilterRefreshing =
     needsPanelServerFetch &&
-    hasPanelTableFilters &&
-    !poolReadyForInstantPanelFilters &&
+    hasActiveTableFilters &&
     ((isSearchActive && isSearchStaging) ||
       (tableQuery.isFetching &&
         !tableQuery.isPlaceholderData &&
@@ -1448,6 +1547,7 @@ export function useProjectListTablePipeline(
     hasTableOnDisk,
     isBackgroundRefresh,
     isFilterRefreshing,
+    isPageTransition,
 
     sourceDataRef,
     clientFilterPoolRef,
@@ -1459,6 +1559,7 @@ export function useProjectListTablePipeline(
     mustRefetchTableRef,
 
     clearTableRows,
+    resetTableForFilterChange,
     resetAppliedTableCacheKeys,
     setClientFilterPoolReady,
     resetTablePipelineForPeriodChange,

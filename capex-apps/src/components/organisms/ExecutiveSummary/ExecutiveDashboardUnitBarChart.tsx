@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import type { ExecutiveDashboardUnitRow } from '../../../lib/executiveSummary/dashboardTypes';
+import { ExecutiveDashboardPanel } from './ExecutiveDashboardPanel';
 
 interface ExecutiveDashboardUnitBarChartProps {
   units: ExecutiveDashboardUnitRow[];
@@ -21,28 +22,26 @@ export const ExecutiveDashboardUnitBarChart = memo(function ExecutiveDashboardUn
 
   if (rows.length === 0) {
     return (
-      <div className="bg-siloam-surface p-5 rounded-xl shadow-soft h-full border border-siloam-border/60">
-        <h3 className="text-base font-bold text-siloam-text-primary mb-4">Budget Utilization per Unit</h3>
-        <p className="text-sm text-siloam-text-secondary text-center py-12">Belum ada data unit.</p>
-      </div>
+      <ExecutiveDashboardPanel title="Budget Utilization per Unit">
+        <p className="text-sm text-siloam-text-secondary text-center py-12 m-auto">Belum ada data unit.</p>
+      </ExecutiveDashboardPanel>
     );
   }
 
   return (
-    <div className="bg-siloam-surface p-5 rounded-xl shadow-soft h-full border border-siloam-border/60">
-      <h3 className="text-base font-bold text-siloam-text-primary mb-4">Budget Utilization per Unit</h3>
-      <div className="space-y-3">
+    <ExecutiveDashboardPanel title="Budget Utilization per Unit">
+      <div className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-1">
         {rows.map((unit) => (
           <div key={unit.unitCode} className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-siloam-text-primary truncate pr-2" title={unit.unitName}>
+            <div className="flex items-center justify-between text-xs gap-2">
+              <span className="font-bold text-siloam-text-primary truncate" title={unit.unitName}>
                 {unit.unitCode}
               </span>
-              <span className="font-bold shrink-0" style={{ color: utilizationColor(unit.utilizationPct) }}>
+              <span className="font-bold shrink-0 tabular-nums" style={{ color: utilizationColor(unit.utilizationPct) }}>
                 {unit.utilizationPct}%
               </span>
             </div>
-            <div className="h-2.5 bg-siloam-bg rounded-full overflow-hidden">
+            <div className="h-2 bg-siloam-bg rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
@@ -54,6 +53,6 @@ export const ExecutiveDashboardUnitBarChart = memo(function ExecutiveDashboardUn
           </div>
         ))}
       </div>
-    </div>
+    </ExecutiveDashboardPanel>
   );
 });

@@ -12,7 +12,7 @@ import {
 } from '../shared/postgrest-filter.util';
 
 /** Bump when list read policy changes — invalidates Redis + FE disk caches. */
-export const PROJECT_LIST_DATA_POLICY = 'v7-server-filter-authoritative';
+export const PROJECT_LIST_DATA_POLICY = 'v8-slim-wire-payload';
 
 const SEARCH_PROJECT_ID_CAP = 3000;
 
@@ -162,6 +162,24 @@ export async function resolveSearchAssetIdsForList(
   return [...ids].slice(0, SEARCH_ASSET_ID_CAP);
 }
 
+/** Union asset-id hits (direct asset search + all assets under matched projects). */
+export async function resolveFullSearchMatchingAssetIds(
+  client: SupabaseClient,
+  searchProjectIds: string[],
+  searchAssetIds: string[],
+): Promise<string[]> {
+  const ids = new Set<string>(sanitizePostgrestIdList(searchAssetIds));
+  const projectIds = sanitizePostgrestIdList(searchProjectIds);
+  for (let i = 0; i < projectIds.length; i += 150) {
+    const chunk = projectIds.slice(i, i + 150);
+    if (chunk.length === 0) continue;
+    const { data, error } = await client.from('assets').select('id').in('project_id', chunk);
+    if (error) throw new Error(`search assets by project: ${error.message}`);
+    for (const row of data || []) ids.add(String((row as { id: string }).id));
+  }
+  return [...ids];
+}
+
 const norm = (s: string) => s.trim().toLowerCase();
 
 export function resolveArchetypeIdByName(archetypes: { id: string; name: string }[], name: string | null): string | null {
@@ -248,8 +266,6 @@ export function poUpdateAssetListSelect(): string {
   end_target_date,
   catalogue_id,
   po_number,
-  cpr_id,
-  po_date,
   qty,
   received_qty,
   is_goods_received,

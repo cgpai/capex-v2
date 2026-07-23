@@ -87,6 +87,15 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Static assets — skip auth redirect (fonts/css were returning HTML → OTS font errors)
+  if (
+    pathname.startsWith('/fonts/') ||
+    pathname.startsWith('/css/') ||
+    /\.(?:css|ttf|otf|woff2?|eot)$/i.test(pathname)
+  ) {
+    return attachRequestId(NextResponse.next(), req);
+  }
+
   if (!requestIpAllowed(req)) {
     return attachRequestId(jsonError(403, 'Forbidden'), req);
   }

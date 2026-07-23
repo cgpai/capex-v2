@@ -30,6 +30,17 @@ export class ProjectListController {
     });
   }
 
+  /** Master config (workflows, users, roles, …) — separate from paginated table rows. */
+  @Post('project-list/master')
+  async projectListMaster(@Req() req: Request, @Body() body: { userId?: number }) {
+    const token = requireAccessTokenFromRequest(req);
+    const userId = Number(body?.userId);
+    if (!Number.isFinite(userId)) {
+      throw new UnauthorizedException('Invalid userId');
+    }
+    return this.projectListService.loadMasterBundle(token, userId);
+  }
+
   /** Server-side search, filter, and pagination — source of truth for Capex Project List table. */
   @Post('project-list/query')
   async projectListQuery(@Req() req: Request, @Body() body: unknown) {

@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { BudgetCategoryConfig, BudgetPeriod } from '@/types';
 import { queryKeys } from '@/lib/query-keys';
+import { resolveDefaultBudgetCategoryId } from '@/lib/budgetSiloamCategoryMerge';
 import { withRequestCache } from '@/lib/requestCache';
 import { isCapexBeConfigured, postToCapexBe } from '@/lib/capexBeClient';
 import { useBackendSession } from '@/lib/auth/authConstants';
@@ -55,15 +56,17 @@ async function loadActiveCategories(userId: number | null): Promise<BudgetCatego
   return [];
 }
 
-export type FetchBudgetSiloamOptions = {
-  /** Bypass client + server cache (use after save). */
+type PeriodBackendOptions = {
   skipCache?: boolean;
+  networkShell?: boolean;
+  categoryId?: string;
+  networkView?: boolean;
 };
 
 async function loadBudgetPeriodFromBackend(
   periodName: string,
   userId: number,
-  skipCache = false,
+  opts: PeriodBackendOptions = {},
 ): Promise<BudgetPeriod | null | undefined> {
   if (!isCapexBeConfigured()) {
     trackBackendFetch('budgetSiloam.period', 'fallback', { reason: 'missing_base_url' });
@@ -74,7 +77,14 @@ async function loadBudgetPeriodFromBackend(
     const token = await resolveAccessToken();
     const body = await postToCapexBe<{ budgetPeriod?: BudgetPeriod | null }>(
       '/budget-hu/period',
-      { periodName: periodName.trim(), userId, skipCache: skipCache || undefined },
+      {
+        periodName: periodName.trim(),
+        userId,
+        skipCache: opts.skipCache || undefined,
+        networkView: opts.networkView ?? opts.networkShell ?? !!opts.categoryId,
+        networkShell: opts.networkShell || undefined,
+        categoryId: opts.categoryId || undefined,
+      },
       token,
     );
     trackBackendFetch('budgetSiloam.period', 'success');
@@ -92,54 +102,112 @@ async function loadBudgetPeriodFromBackend(
   }
 }
 
-async function loadBudgetPeriodFromNetwork(
-  periodName: string,
-  userId: number | null,
-  skipCache = false,
-): Promise<BudgetPeriod | null> {
-  if (userId != null) {
-    const fromBe = await loadBudgetPeriodFromBackend(periodName, userId, skipCache);
-    if (fromBe !== undefined) {
-      return fromBe;
-    }
-  }
+export type FetchBudgetSiloamOptions = {
+  skipCache?: boolean;
+};
 
-  return null;
-}
-
-export async function fetchBudgetSiloamPeriodBundle(
+/** Shell only — period totals + archetype/HU plans, no projects (fast mount). */
+export async function fetchBudgetSiloamShellBundle(
   periodName: string,
   userId?: number,
   options?: FetchBudgetSiloamOptions,
 ): Promise<BudgetSiloamPeriodBundle> {
   const period = periodName.trim();
-  if (!period) {
-    return { budgetPeriod: null, categories: [] };
-  }
+  if (!period) return { budgetPeriod: null, categories: [] };
 
   const uid = resolveUserId(userId);
   const skipCache = options?.skipCache === true;
   const loader = async (): Promise<BudgetSiloamPeriodBundle> => {
     const [budgetPeriod, categories] = await Promise.all([
-      loadBudgetPeriodFromNetwork(period, uid, skipCache),
+      uid != null
+        ? loadBudgetPeriodFromBackend(period, uid, { skipCache, networkShell: true })
+        : Promise.resolve(null),
       loadActiveCategories(uid),
     ]);
-    return { budgetPeriod, categories };
+    return { budgetPeriod: budgetPeriod ?? null, categories };
   };
 
-  if (skipCache) {
-    return loader();
-  }
+  if (skipCache) return loader();
 
   const cacheKey =
     uid != null
-      ? `budget-siloam:bundle:${uid}:${period.toLowerCase()}`
-      : `budget-siloam:bundle:anon:${period.toLowerCase()}`;
+      ? `budget-siloam:shell:${uid}:${period.toLowerCase()}`
+      : `budget-siloam:shell:anon:${period.toLowerCase()}`;
 
   return withRequestCache(cacheKey, loader, PAGE_STALE_MS);
 }
 
-/** Warm Siloam screen cache (sidebar hover / period change). */
+/** One budget category — projects + live aggregates (on tab click). */
+export async function fetchBudgetSiloamCategorySlice(
+  periodName: string,
+  categoryId: string,
+  userId?: number,
+  options?: FetchBudgetSiloamOptions,
+): Promise<BudgetPeriod | null> {
+  const period = periodName.trim();
+  const cat = String(categoryId ?? '').trim();
+  if (!period || !cat) return null;
+
+  const uid = resolveUserId(userId);
+  if (uid == null) return null;
+
+  const skipCache = options?.skipCache === true;
+  const loader = async () => {
+    const fromBe = await loadBudgetPeriodFromBackend(period, uid, {
+      skipCache,
+      categoryId: cat,
+      networkView: true,
+    });
+    return fromBe ?? null;
+  };
+
+  if (skipCache) return loader();
+
+  const cacheKey = `budget-siloam:category:${uid}:${period.toLowerCase()}:${cat.toLowerCase()}`;
+  return withRequestCache(cacheKey, loader, PAGE_STALE_MS);
+}
+
+/** Full network tree (all categories) — Budget Archetype / legacy paths. */
+export async function fetchBudgetSiloamFullNetworkBundle(
+  periodName: string,
+  userId?: number,
+  options?: FetchBudgetSiloamOptions,
+): Promise<BudgetSiloamPeriodBundle> {
+  const period = periodName.trim();
+  if (!period) return { budgetPeriod: null, categories: [] };
+
+  const uid = resolveUserId(userId);
+  const skipCache = options?.skipCache === true;
+  const loader = async (): Promise<BudgetSiloamPeriodBundle> => {
+    const [budgetPeriod, categories] = await Promise.all([
+      uid != null
+        ? loadBudgetPeriodFromBackend(period, uid, { skipCache, networkView: true })
+        : Promise.resolve(null),
+      loadActiveCategories(uid),
+    ]);
+    return { budgetPeriod: budgetPeriod ?? null, categories };
+  };
+
+  if (skipCache) return loader();
+
+  const cacheKey =
+    uid != null
+      ? `budget-siloam:full-network:${uid}:${period.toLowerCase()}`
+      : `budget-siloam:full-network:anon:${period.toLowerCase()}`;
+
+  return withRequestCache(cacheKey, loader, PAGE_STALE_MS);
+}
+
+/** @deprecated Use fetchBudgetSiloamShellBundle + fetchBudgetSiloamCategorySlice. */
+export async function fetchBudgetSiloamPeriodBundle(
+  periodName: string,
+  userId?: number,
+  options?: FetchBudgetSiloamOptions,
+): Promise<BudgetSiloamPeriodBundle> {
+  return fetchBudgetSiloamShellBundle(periodName, userId, options);
+}
+
+/** Warm shell + Revenue Maintenance (default tab) on nav hover. */
 export function prefetchBudgetSiloamPeriodBundle(
   queryClient: QueryClient,
   periodName: string,
@@ -147,9 +215,22 @@ export function prefetchBudgetSiloamPeriodBundle(
 ): void {
   const period = periodName.trim();
   if (!period) return;
-  void queryClient.prefetchQuery({
-    queryKey: queryKeys.budgetSiloamPeriod.detail(period),
-    queryFn: () => fetchBudgetSiloamPeriodBundle(period, userId),
-    staleTime: PAGE_STALE_MS,
-  });
+  void queryClient
+    .prefetchQuery({
+      queryKey: queryKeys.budgetSiloamPeriod.shell(period),
+      queryFn: () => fetchBudgetSiloamShellBundle(period, userId),
+      staleTime: PAGE_STALE_MS,
+    })
+    .then(() => {
+      const shell = queryClient.getQueryData<BudgetSiloamPeriodBundle>(
+        queryKeys.budgetSiloamPeriod.shell(period),
+      );
+      const defaultCategoryId = resolveDefaultBudgetCategoryId(shell?.categories ?? []);
+      if (!defaultCategoryId) return;
+      void queryClient.prefetchQuery({
+        queryKey: queryKeys.budgetSiloamPeriod.category(period, defaultCategoryId),
+        queryFn: () => fetchBudgetSiloamCategorySlice(period, defaultCategoryId, userId),
+        staleTime: PAGE_STALE_MS,
+      });
+    });
 }

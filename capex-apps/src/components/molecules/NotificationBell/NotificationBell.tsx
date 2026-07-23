@@ -145,22 +145,22 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ notification
                     <ul className="max-h-96 overflow-y-auto">
                         {filteredNotifications.length > 0 ? filteredNotifications.map(notification => (
                             <li key={notification.id}>
-                                <a
-                                    href="#"
-                                    onClick={(e) => { e.preventDefault(); handleNotificationClick(notification); }}
-                                    className={`flex items-start gap-3 p-4 hover:bg-siloam-bg transition-colors border-b border-siloam-border last:border-b-0 ${!notification.isRead ? 'bg-siloam-blue/5' : ''}`}
+                                <button
+                                    type="button"
+                                    onClick={() => handleNotificationClick(notification)}
+                                    className={`flex w-full items-start gap-3 p-4 text-left hover:bg-siloam-bg transition-colors border-b border-siloam-border last:border-b-0 ${!notification.isRead ? 'bg-siloam-blue/5' : ''}`}
                                 >
                                     {!notification.isRead && (
-                                        <div className="w-2 h-2 mt-2 rounded-full bg-siloam-blue flex-shrink-0"></div>
+                                        <div className="w-2 h-2 mt-2 rounded-full bg-siloam-blue flex-shrink-0" aria-hidden />
                                     )}
                                     <div className={`flex-shrink-0 ${notification.isRead ? 'ml-4' : ''}`}>
                                         {getNotificationIcon(notification.type)}
                                     </div>
-                                    <div className="flex-1">
+                                    <div className="flex-1 min-w-0">
                                         <p className="text-sm text-siloam-text-primary">{notification.message}</p>
                                         <p className="text-xs text-siloam-text-secondary mt-1">{timeSince(new Date(notification.createdAt))}</p>
                                     </div>
-                                </a>
+                                </button>
                             </li>
                         )) : (
                             <li className="p-8 text-center text-sm text-siloam-text-secondary">

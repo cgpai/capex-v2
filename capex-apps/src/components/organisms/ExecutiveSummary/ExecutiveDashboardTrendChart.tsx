@@ -1,6 +1,7 @@
 import React, { memo, useMemo } from 'react';
 import type { ExecutiveDashboardMonthlyPoint } from '../../../lib/executiveSummary/dashboardTypes';
 import { formatBudgetView } from '../../../lib/formatter';
+import { ExecutiveDashboardPanel } from './ExecutiveDashboardPanel';
 
 interface ExecutiveDashboardTrendChartProps {
   data: ExecutiveDashboardMonthlyPoint[];
@@ -20,23 +21,23 @@ export const ExecutiveDashboardTrendChart = memo(function ExecutiveDashboardTren
 
   if (data.length === 0 || maxValue === 0) {
     return (
-      <ChartShell title="Tren Penggunaan Budget (YTD)">
-        <p className="text-sm text-siloam-text-secondary text-center py-12">Belum ada data realisasi.</p>
-      </ChartShell>
+      <ExecutiveDashboardPanel title="Tren Penggunaan Budget (YTD)">
+        <p className="text-sm text-siloam-text-secondary text-center py-12 m-auto">Belum ada data realisasi.</p>
+      </ExecutiveDashboardPanel>
     );
   }
 
   return (
-    <ChartShell title="Tren Penggunaan Budget (YTD)">
-      <div className="flex items-center justify-end gap-4 text-xs mb-4 flex-wrap">
+    <ExecutiveDashboardPanel title="Tren Penggunaan Budget (YTD)">
+      <div className="flex items-center justify-end gap-3 text-[11px] mb-3 flex-wrap shrink-0">
         <Legend color="#00529B" label="Realisasi periode ini" />
         {showPriorYear ? <Legend color="#94A3B8" label="Periode sebelumnya" /> : null}
         <Legend color="#00A3E0" label="Target budget bulanan" dashed />
       </div>
-      <div className="flex items-end gap-1.5 h-48 px-1">
+      <div className="flex items-end gap-1 h-44 px-1 flex-1 min-h-0">
         {data.map((point) => (
-          <div key={point.month} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-            <div className="w-full flex items-end justify-center gap-0.5 h-40 relative">
+          <div key={point.month} className="flex-1 flex flex-col items-center gap-1 min-w-0 h-full">
+            <div className="w-full flex items-end justify-center gap-0.5 flex-1 relative min-h-0">
               {showPriorYear ? (
                 <Bar heightPct={(point.priorYear / maxValue) * 100} color="#CBD5E1" title={`${point.label} LY: ${formatBudgetView(point.priorYear)}`} />
               ) : null}
@@ -47,30 +48,21 @@ export const ExecutiveDashboardTrendChart = memo(function ExecutiveDashboardTren
                 title={`Target: ${formatBudgetView(point.budgetTarget)}`}
               />
             </div>
-            <span className="text-[10px] text-siloam-text-secondary font-medium truncate w-full text-center">
+            <span className="text-[10px] text-siloam-text-secondary font-medium truncate w-full text-center shrink-0">
               {point.label}
             </span>
           </div>
         ))}
       </div>
-    </ChartShell>
+    </ExecutiveDashboardPanel>
   );
 });
-
-function ChartShell({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-siloam-surface p-5 rounded-xl shadow-soft h-full flex flex-col border border-siloam-border/60">
-      <h3 className="text-base font-bold text-siloam-text-primary mb-2">{title}</h3>
-      <div className="flex-1">{children}</div>
-    </div>
-  );
-}
 
 function Legend({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
   return (
     <div className="flex items-center gap-1.5">
       <span
-        className={`w-3 h-3 rounded-sm ${dashed ? 'border-2 border-dashed bg-transparent' : ''}`}
+        className={`w-2.5 h-2.5 rounded-sm ${dashed ? 'border-2 border-dashed bg-transparent' : ''}`}
         style={dashed ? { borderColor: color } : { backgroundColor: color }}
       />
       <span className="text-siloam-text-secondary">{label}</span>
@@ -81,7 +73,7 @@ function Legend({ color, label, dashed }: { color: string; label: string; dashed
 function Bar({ heightPct, color, title }: { heightPct: number; color: string; title: string }) {
   return (
     <div
-      className="w-2 rounded-t-sm transition-all"
+      className="w-2 sm:w-2.5 rounded-t-sm transition-all"
       style={{ height: `${Math.max(heightPct, 2)}%`, backgroundColor: color }}
       title={title}
     />

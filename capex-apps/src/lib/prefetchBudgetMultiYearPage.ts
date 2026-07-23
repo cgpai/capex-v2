@@ -24,7 +24,8 @@ export function hydrateBudgetMultiYearPageFromCache(
 /** Warm cache saat shell siap / hover sidebar Multi-Year Budget. */
 export function prefetchBudgetMultiYearPage(queryClient: QueryClient, userId: number): void {
   if (!Number.isFinite(userId)) return;
-  hydrateBudgetMultiYearPageFromCache(queryClient, userId);
+  const seed = hydrateBudgetMultiYearPageFromCache(queryClient, userId);
+  if (seed?.multiYears.length && seed.categories.length) return;
 
   const qk = queryKeys.budgetMultiYear.page(userId);
   const state = queryClient.getQueryState(qk);
