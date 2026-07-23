@@ -42,12 +42,16 @@ import {
   type MyTaskSortOption,
   sanitizeTaskSearchInput,
   buildTaskDerivedFilterOptions,
+  buildTaskDerivedAssignedRoleOptions,
   buildScopedArchetypeOptions,
   buildScopedHuOptions,
   mergeFilterOptionLists,
   filterMyTasksByUserScope,
+  filterMyTasksByViewMode,
   filterAndSortMyTasks,
   paginateTasks,
+  MY_TASK_VIEW_MODE_OPTIONS,
+  type MyTaskViewMode,
 } from './MyTask/listUtils';
 
 const KanbanBoardLazy = lazy(() =>
@@ -199,6 +203,7 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
   const queryClient = useQueryClient();
   const permissions = usePermissions(currentUser, allRoles);
   const canView = permissions.canOperateOnPage(Page.MyTask, 'view');
+  const canViewAllUserTasks = permissions.userScopes.all;
   const [taskToComplete, setTaskToComplete] = useState<UserTask | null>(null);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
 
@@ -214,15 +219,20 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
       periodName,
       preloadedTasks,
     );
+    if (resolved?.tasks?.length === 0) return undefined;
     return resolved ?? undefined;
   }, [currentUser?.id, periodName, preloadedTasks]);
+
+  const shouldSkipServerCache = diskTasksSeed?.tasks?.length === 0;
 
   const tasksQuery = useQuery({
     queryKey: currentUser
       ? queryKeys.myTasks.page(currentUser.id, periodName)
       : ['screen', 'my-tasks', 'idle'],
     queryFn: async () => {
-      const bundle = await fetchMyTasksPageBundle(currentUser!, periodName);
+      const bundle = await fetchMyTasksPageBundle(currentUser!, periodName, {
+        skipCache: shouldSkipServerCache,
+      });
       writeMyTasksCache(currentUser!.id, periodName, bundle);
       return bundle;
     },
@@ -231,7 +241,7 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
     gcTime: 1000 * 60 * 60 * 24,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    refetchOnMount: !diskTasksSeed,
+    refetchOnMount: !diskTasksSeed || shouldSkipServerCache,
     initialData: diskTasksSeed,
     placeholderData: (previousData) => previousData ?? diskTasksSeed,
   });
@@ -266,6 +276,13 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
     () => savedFilters?.selectedArchetypes ?? [],
   );
   const [selectedHUs, setSelectedHUs] = useState<string[]>(() => savedFilters?.selectedHUs ?? []);
+  const [selectedAssignedRoles, setSelectedAssignedRoles] = useState<string[]>(
+    () => savedFilters?.selectedAssignedRoles ?? [],
+  );
+  const [taskViewMode, setTaskViewMode] = useState<MyTaskViewMode>(() => {
+    if (savedFilters?.taskViewMode) return savedFilters.taskViewMode;
+    return canViewAllUserTasks ? 'all_users' : 'my_tasks_only';
+  });
   const [sortBy, setSortBy] = useState<MyTaskSortOption>(
     () => savedFilters?.sortBy ?? 'targetDate_desc',
   );
@@ -287,6 +304,8 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
       searchTerm,
       selectedArchetypes,
       selectedHUs,
+      selectedAssignedRoles,
+      taskViewMode,
       sortBy,
       itemsPerPage,
     });
@@ -296,16 +315,23 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
     searchTerm,
     selectedArchetypes,
     selectedHUs,
+    selectedAssignedRoles,
+    taskViewMode,
     sortBy,
     itemsPerPage,
   ]);
 
-  const scopedTasks = useMemo(
-    () => filterMyTasksByUserScope(tasks, permissions.userScopes),
-    [tasks, permissions.userScopes],
-  );
+  const scopedTasks = useMemo(() => {
+    const byScope = filterMyTasksByUserScope(tasks, permissions.userScopes);
+    if (!currentUser || !canViewAllUserTasks) return byScope;
+    return filterMyTasksByViewMode(byScope, taskViewMode, currentUser, allRoles);
+  }, [tasks, permissions.userScopes, canViewAllUserTasks, taskViewMode, currentUser, allRoles]);
 
   const taskDerivedOptions = useMemo(() => buildTaskDerivedFilterOptions(scopedTasks), [scopedTasks]);
+  const assignedRoleOptions = useMemo(
+    () => buildTaskDerivedAssignedRoleOptions(scopedTasks),
+    [scopedTasks],
+  );
 
   const scopedArchetypeOptions = useMemo(() => {
     const fromMaster = buildScopedArchetypeOptions(
@@ -331,6 +357,11 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
     return selectedHUs.filter((h) => allowed.has(h));
   }, [selectedHUs, scopedHuOptions]);
 
+  const effectiveAssignedRoles = useMemo(() => {
+    const allowed = new Set(assignedRoleOptions);
+    return selectedAssignedRoles.filter((role) => allowed.has(role));
+  }, [selectedAssignedRoles, assignedRoleOptions]);
+
   const searchLower = useMemo(
     () => sanitizeTaskSearchInput(debouncedSearchTerm).toLowerCase(),
     [debouncedSearchTerm],
@@ -338,7 +369,7 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchLower, effectiveArchetypes, effectiveHUs, showCompleted, sortBy]);
+  }, [searchLower, effectiveArchetypes, effectiveHUs, effectiveAssignedRoles, showCompleted, sortBy, taskViewMode]);
 
   const processedTasks = useMemo(
     () =>
@@ -347,9 +378,18 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
         searchLower,
         selectedArchetypes: effectiveArchetypes,
         selectedHUs: effectiveHUs,
+        selectedAssignedRoles: effectiveAssignedRoles,
         sortBy,
       }),
-    [scopedTasks, showCompleted, searchLower, effectiveArchetypes, effectiveHUs, sortBy],
+    [
+      scopedTasks,
+      showCompleted,
+      searchLower,
+      effectiveArchetypes,
+      effectiveHUs,
+      effectiveAssignedRoles,
+      sortBy,
+    ],
   );
 
   const paginatedTasks = useMemo(
@@ -461,6 +501,12 @@ export const MyTaskPage: React.FC<MyTaskPageProps> = ({
         huOptions={scopedHuOptions}
         selectedHUs={selectedHUs}
         setSelectedHUs={setSelectedHUs}
+        assignedRoleOptions={assignedRoleOptions}
+        selectedAssignedRoles={selectedAssignedRoles}
+        setSelectedAssignedRoles={setSelectedAssignedRoles}
+        taskViewModeOptions={canViewAllUserTasks ? MY_TASK_VIEW_MODE_OPTIONS : undefined}
+        taskViewMode={taskViewMode}
+        setTaskViewMode={(mode) => setTaskViewMode(mode as MyTaskViewMode)}
         extraFilters={extraFiltersNode}
         onFilterVisibilityChange={handleFilterVisibilityChange}
       >

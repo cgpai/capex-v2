@@ -1,11 +1,11 @@
 import type { MyTasksPageBundle } from '@/hooks/queries/fetchMyTasksPage';
-import type { MyTaskSortOption } from '@/screens/MyTask/listUtils';
+import type { MyTaskSortOption, MyTaskViewMode } from '@/screens/MyTask/listUtils';
 import { readPeriodShellCache } from '@/lib/periodSelectionCache';
 import { readCachedAuthUser } from '@/lib/authSessionCache';
 
-const DISK_PREFIX = 'capexMyTasksCache:v1:';
+const DISK_PREFIX = 'capexMyTasksCache:v2:';
 const LEGACY_SNAPSHOT_PREFIX = 'page-snapshot:my-tasks:';
-const FILTER_KEY = 'capex.myTasks.filters.v1';
+const FILTER_KEY = 'capex.myTasks.filters.v2';
 
 /** Table TTL — align with MY_TASKS_STALE_MS / BE table cache. */
 export const MY_TASKS_DISK_TTL_MS = 5 * 60 * 1000;
@@ -18,6 +18,8 @@ export type MyTasksFilterSelection = {
   searchTerm: string;
   selectedArchetypes: string[];
   selectedHUs: string[];
+  selectedAssignedRoles: string[];
+  taskViewMode: MyTaskViewMode;
   sortBy: MyTaskSortOption;
   itemsPerPage: number;
 };

@@ -1,4 +1,4 @@
-import type { UserTask } from '@/types';
+import type { User, UserRole, UserTask } from '@/types';
 import {
   buildScopedArchetypeOptions,
   buildScopedHuOptions,
@@ -8,6 +8,13 @@ import { AdhocTaskStatus, TaskCurrentStatus } from '@/types';
 
 export { buildScopedArchetypeOptions, buildScopedHuOptions };
 export type { UserScopesShape };
+
+export type MyTaskViewMode = 'all_users' | 'my_tasks_only';
+
+export const MY_TASK_VIEW_MODE_OPTIONS: { label: string; value: MyTaskViewMode }[] = [
+  { label: 'Semua task user', value: 'all_users' },
+  { label: 'Task saya saja', value: 'my_tasks_only' },
+];
 
 export type MyTaskSortOption =
   | 'targetDate_desc'
@@ -52,6 +59,44 @@ export function mergeFilterOptionLists(primary: string[], fallback: string[]): s
   return fallback;
 }
 
+export function buildTaskDerivedAssignedRoleOptions(tasks: UserTask[]): string[] {
+  const roles = new Set<string>();
+  for (const task of tasks) {
+    for (const role of task.assignedRoles ?? []) {
+      if (role.roleName?.trim()) roles.add(role.roleName.trim());
+    }
+  }
+  return Array.from(roles).sort((a, b) => a.localeCompare(b));
+}
+
+function userRoleIdsForAssignments(user: User, allRoles: UserRole[]): Set<string> {
+  const ids = new Set<string>();
+  for (const assignment of user.assignments ?? []) {
+    const role = allRoles.find((r) => r.roleName === assignment.roleName);
+    if (role?.id != null) ids.add(String(role.id));
+  }
+  return ids;
+}
+
+/** Super Admin / scope All: narrow list to tasks tied to the viewer's own roles. */
+export function filterMyTasksByViewMode(
+  tasks: UserTask[],
+  mode: MyTaskViewMode,
+  currentUser: User,
+  allRoles: UserRole[],
+): UserTask[] {
+  if (mode === 'all_users') return tasks;
+
+  const userRoleIds = userRoleIdsForAssignments(currentUser, allRoles);
+  return tasks.filter((task) => {
+    if (task.type === 'adhoc') {
+      return Number(task.adhocTask?.assignedToUserId) === Number(currentUser.id);
+    }
+    const stepRoleIds = task.workflowStep?.roleIds ?? [];
+    return stepRoleIds.some((rid) => userRoleIds.has(String(rid)));
+  });
+}
+
 export function filterMyTasksByUserScope(tasks: UserTask[], userScopes: UserScopesShape): UserTask[] {
   if (userScopes.all) return tasks;
   if (
@@ -75,6 +120,7 @@ export type MyTaskFilterState = {
   searchLower: string;
   selectedArchetypes: string[];
   selectedHUs: string[];
+  selectedAssignedRoles: string[];
   sortBy: MyTaskSortOption;
 };
 
@@ -101,12 +147,15 @@ export function filterAndSortMyTasks(tasks: UserTask[], filters: MyTaskFilterSta
     searchLower,
     selectedArchetypes,
     selectedHUs,
+    selectedAssignedRoles,
     sortBy,
   } = filters;
 
   const archetypeSet =
     selectedArchetypes.length > 0 ? new Set(selectedArchetypes) : null;
   const huSet = selectedHUs.length > 0 ? new Set(selectedHUs) : null;
+  const assignedRoleSet =
+    selectedAssignedRoles.length > 0 ? new Set(selectedAssignedRoles) : null;
 
   const filtered: UserTask[] = [];
   for (const task of tasks) {
@@ -127,6 +176,10 @@ export function filterAndSortMyTasks(tasks: UserTask[], filters: MyTaskFilterSta
 
     if (archetypeSet && !archetypeSet.has(task.archetypeName)) continue;
     if (huSet && !huSet.has(task.huName)) continue;
+    if (assignedRoleSet) {
+      const roleNames = (task.assignedRoles ?? []).map((r) => r.roleName).filter(Boolean);
+      if (!roleNames.some((name) => assignedRoleSet.has(name))) continue;
+    }
 
     filtered.push(task);
   }

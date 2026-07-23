@@ -53,6 +53,12 @@ interface TaskFilterPanelProps {
     categoryOptions?: string[];
     selectedCategories?: string[];
     setSelectedCategories?: (categories: string[]) => void;
+    assignedRoleOptions?: string[];
+    selectedAssignedRoles?: string[];
+    setSelectedAssignedRoles?: (roles: string[]) => void;
+    taskViewModeOptions?: { label: string; value: string }[];
+    taskViewMode?: string;
+    setTaskViewMode?: (mode: string) => void;
     onResetFilters?: () => void;
     searchPlaceholder?: string;
     /** Optional actions rendered before the search input (e.g. Quick edit buttons). */
@@ -68,6 +74,8 @@ export const TaskFilterPanel: React.FC<TaskFilterPanelProps> = ({
     huOptions, selectedHUs, setSelectedHUs,
     archetypeOptions, selectedArchetypes, setSelectedArchetypes,
     categoryOptions, selectedCategories, setSelectedCategories,
+    assignedRoleOptions, selectedAssignedRoles, setSelectedAssignedRoles,
+    taskViewModeOptions, taskViewMode, setTaskViewMode,
     onResetFilters,
     searchPlaceholder = 'Search tasks, projects, assets...',
     toolbarLeading,
@@ -88,6 +96,8 @@ export const TaskFilterPanel: React.FC<TaskFilterPanelProps> = ({
         setSelectedHUs([]);
         if (setSelectedArchetypes) setSelectedArchetypes([]);
         if (setSelectedCategories) setSelectedCategories([]);
+        if (setSelectedAssignedRoles) setSelectedAssignedRoles([]);
+        if (setTaskViewMode && taskViewModeOptions?.[0]) setTaskViewMode(taskViewModeOptions[0].value);
         onResetFilters?.();
     };
 
@@ -118,10 +128,36 @@ export const TaskFilterPanel: React.FC<TaskFilterPanelProps> = ({
             {isFilterVisible && (
                 <div className="mt-4 pt-4 border-t border-siloam-border animate-fade-in">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {taskViewModeOptions && taskViewMode && setTaskViewMode && (
+                            <div>
+                                <label className="block text-sm font-medium text-siloam-text-secondary">
+                                    Tampilan Task
+                                </label>
+                                <select
+                                    value={taskViewMode}
+                                    onChange={(e) => setTaskViewMode(e.target.value)}
+                                    className="mt-1 block w-full border border-siloam-border rounded-xl p-2 bg-siloam-surface focus:outline-none focus:ring-2 focus:ring-siloam-blue"
+                                >
+                                    {taskViewModeOptions.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
                         {archetypeOptions && selectedArchetypes && setSelectedArchetypes && (
                              <MultiSelectDropdown title="Filter by Network" options={archetypeOptions} selected={selectedArchetypes} onSelectionChange={setSelectedArchetypes} />
                         )}
                         <MultiSelectDropdown title="Filter by Hospital Unit" options={huOptions} selected={selectedHUs} onSelectionChange={setSelectedHUs} />
+                        {assignedRoleOptions && selectedAssignedRoles && setSelectedAssignedRoles && assignedRoleOptions.length > 0 && (
+                            <MultiSelectDropdown
+                                title="Filter by Assigned Role"
+                                options={assignedRoleOptions}
+                                selected={selectedAssignedRoles}
+                                onSelectionChange={setSelectedAssignedRoles}
+                            />
+                        )}
                         {categoryOptions && selectedCategories && setSelectedCategories && (
                             <MultiSelectDropdown title="Filter by Budget Category" options={categoryOptions} selected={selectedCategories} onSelectionChange={setSelectedCategories} />
                         )}

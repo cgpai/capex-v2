@@ -27,6 +27,12 @@ export function userIsSuperAdmin(assignments: UserAssignmentLike[] | undefined):
   return (assignments ?? []).some((a) => isSuperAdminRole(a.roleName));
 }
 
+/** Super Admin or assignment scope "All" — may view every task in My Task (not only own role steps). */
+export function userCanViewAllTasks(assignments: UserAssignmentLike[] | undefined): boolean {
+  if (userIsSuperAdmin(assignments)) return true;
+  return (assignments ?? []).some((a) => assignmentHasAllScope(a.assignedScopes));
+}
+
 /** Union of all assignment scopes — for ad-hoc tasks and display belt checks. */
 export function isAssetInUserUnionScope(
   asset: AssetScopeLike,
@@ -55,6 +61,8 @@ export function isWorkflowStepAssignedToUser(
   asset: AssetScopeLike,
   maps: ScopeResolutionMaps,
 ): boolean {
+  if (userCanViewAllTasks(assignments)) return true;
+
   const stepRoleSet = new Set(stepRoleIds.map(norm));
 
   for (const assignment of assignments ?? []) {

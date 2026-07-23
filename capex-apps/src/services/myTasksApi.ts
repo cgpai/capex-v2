@@ -9,10 +9,15 @@ export async function fetchMyTasks(
   userId: number,
   accessToken?: string | null,
   periodName?: string,
+  skipCache = false,
 ): Promise<UserTask[]> {
   const data = await postToCapexBe<{ tasks: UserTask[] }>(
     '/my-tasks',
-    { userId, periodName: periodName?.trim() || undefined },
+    {
+      userId,
+      periodName: periodName?.trim() || undefined,
+      ...(skipCache ? { skipCache: true } : {}),
+    },
     accessToken,
   );
   return data.tasks ?? [];

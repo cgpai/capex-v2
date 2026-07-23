@@ -1,0 +1,13 @@
+# Halaman maintenance CAPEX — ganti capex-web + capex-api di VPS.
+# Port 8080 sama seperti capex-web lama (nginx host biasanya proxy ke sini).
+
+services:
+  capex-maintenance:
+    build:
+      context: ../..
+      dockerfile: deploy/maintenance/Dockerfile
+    image: capex-maintenance:local
+    container_name: capex-maintenance
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"

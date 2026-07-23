@@ -3,9 +3,9 @@ import { AuthContextService } from '../auth/auth-context.service';
 import { AuthZService } from '../auth/auth-z.service';
 import { getAllEnrichedAssetsForPeriod } from '../project-list/enriched-assets.loader';
 import { getAllRoles, getAllTasks, getAllUsers, getAllWorkflowSets, getAllArchetypesConfig, getAllHospitalUnitsConfig } from '../project-list/master-data.loader';
-import { fetchAllRecordsWhereEq, fetchRecordsByAssetIds, normAssetTaskStatusRow, normTaskLogRow, toCamelCase } from '../project-list/supabase-helpers';
+import { fetchAllRecords, fetchAllRecordsWhereEq, fetchRecordsByAssetIds, normAssetTaskStatusRow, normTaskLogRow, toCamelCase } from '../project-list/supabase-helpers';
 import { buildUserTasksSnapshot } from './build-user-tasks';
-import { buildScopeResolutionMaps } from './task-assignment-scope';
+import { buildScopeResolutionMaps, userCanViewAllTasks } from './task-assignment-scope';
 import { perfCacheDelete, perfCacheGet, perfCacheSet } from '../shared/perf-cache';
 
 @Injectable()
@@ -20,7 +20,7 @@ export class MyTasksService {
   private readonly inflight = new Map<string, Promise<{ tasks: any[] }>>();
 
   private cacheKey(userId: number, periodName?: string): string {
-    return `my-tasks:${userId}::${(periodName || '').trim().toLowerCase()}`;
+    return `my-tasks:v2:${userId}::${(periodName || '').trim().toLowerCase()}`;
   }
 
   private pruneCache(): void {
@@ -59,13 +59,12 @@ export class MyTasksService {
     const run = (async () => {
     const { client } = await this.authContext.getRlsClient(accessToken, userId);
 
-    const [allUsers, allWorkflows, allRoles, allTasks, rawEnrichedAssets, adhocRaw, archetypes, hus] = await Promise.all([
+    const [allUsers, allWorkflows, allRoles, allTasks, rawEnrichedAssets, archetypes, hus] = await Promise.all([
       getAllUsers(client),
       getAllWorkflowSets(client),
       getAllRoles(client),
       getAllTasks(client),
       getAllEnrichedAssetsForPeriod(client, periodName?.trim() || undefined),
-      fetchAllRecordsWhereEq(client, 'adhoc_tasks', 'assigned_to_user_id', userId),
       getAllArchetypesConfig(client),
       getAllHospitalUnitsConfig(client),
     ]);
@@ -77,6 +76,11 @@ export class MyTasksService {
 
     const userAssignments = userRow.assignments || [];
     const scopeMaps = buildScopeResolutionMaps(archetypes, hus);
+    const viewAllTasks = userCanViewAllTasks(userAssignments);
+
+    const adhocRaw = viewAllTasks
+      ? await fetchAllRecords(client, 'adhoc_tasks', '*')
+      : await fetchAllRecordsWhereEq(client, 'adhoc_tasks', 'assigned_to_user_id', userId);
 
     const adhocForUser = (adhocRaw || []).map((row: any) => toCamelCase(row));
 

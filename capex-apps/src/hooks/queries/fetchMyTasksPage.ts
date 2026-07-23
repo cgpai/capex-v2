@@ -45,9 +45,18 @@ function requestCacheKey(userId: number, periodName: string | undefined): string
   return `my-tasks:bundle:${userId}:${periodName?.trim() ?? ''}`;
 }
 
-async function loadUserTasks(currentUser: User, periodName: string | undefined): Promise<UserTask[]> {
+async function loadUserTasks(
+  currentUser: User,
+  periodName: string | undefined,
+  options?: { skipCache?: boolean },
+): Promise<UserTask[]> {
+  const skipCache = !!options?.skipCache;
+  const cacheKey = skipCache
+    ? `${requestCacheKey(currentUser.id, periodName)}:skip`
+    : requestCacheKey(currentUser.id, periodName);
+
   return withRequestCache(
-    requestCacheKey(currentUser.id, periodName),
+    cacheKey,
     async () => {
       if (isCapexBeConfigured()) {
         const token = await resolveMyTasksAccessToken(getAccessTokenForBackend);
@@ -55,7 +64,7 @@ async function loadUserTasks(currentUser: User, periodName: string | undefined):
           throw new Error('Sesi tidak valid — login ulang untuk memuat task.');
         }
         try {
-          return await fetchMyTasks(currentUser.id, token, periodName);
+          return await fetchMyTasks(currentUser.id, token, periodName, skipCache);
         } catch (beErr) {
           if (isCapexBeNetworkError(beErr)) {
             console.warn('My tasks BE unreachable, using direct Supabase path:', beErr);
@@ -116,8 +125,9 @@ export async function resolveMyTasksForUser(
 export async function fetchMyTasksPageBundle(
   currentUser: User,
   periodName: string | undefined,
+  options?: { skipCache?: boolean },
 ): Promise<MyTasksPageBundle> {
-  const tasks = await loadUserTasks(currentUser, periodName);
+  const tasks = await loadUserTasks(currentUser, periodName, options);
   const bundle: MyTasksPageBundle = {
     masterData: { archetypes: [], hus: [] },
     tasks,
