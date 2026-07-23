@@ -302,14 +302,12 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       users: activePreloadedProjectList?.users ?? [],
     }),
   );
-  const masterConfig = useCapexProjectListMasterConfig(currentUser?.id);
-  const allCategories = masterConfig.categories;
-  const allAssetTypes = masterConfig.assetTypes;
-  const allAssetTypeGroups = masterConfig.assetTypeGroups;
+  const { categories: allCategories, assetTypes: allAssetTypes, assetTypeGroups: allAssetTypeGroups, reloadMasterConfig } =
+    useCapexProjectListMasterConfig(currentUser?.id);
 
   const refreshMasterConfig = useCallback(() => {
-    void masterConfig.reloadMasterConfig({ fresh: true });
-  }, [masterConfig]);
+    void reloadMasterConfig({ fresh: true });
+  }, [reloadMasterConfig]);
 
   const permissions = usePermissions(currentUser, allRoles);
   const canView = permissions.canOperateOnPage(Page.CapexProjectList, 'view');
@@ -686,11 +684,6 @@ const CapexProjectListPageInner: React.FC<CapexProjectListPageProps> = ({
       setSelectedHUs,
     ],
   );
-
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    void masterConfig.reloadMasterConfig();
-  }, [currentUser?.id, masterConfig]);
 
   /** Prune saved HU selection that conflicts with saved meeting archetype once master loads. */
   useEffect(() => {

@@ -1241,7 +1241,6 @@ export function useProjectListTablePipeline(
     panelFiltersKey,
     setCurrentPage,
     clearTableRows,
-    prevPanelFiltersKeyRef,
   ]);
 
   useLayoutEffect(() => {
@@ -1490,6 +1489,12 @@ export function useProjectListTablePipeline(
       !!primaryPeriodName &&
       hasProjectListTableOnDisk(primaryPeriodName, currentUser.id));
 
+  const isPageTransition =
+    needsPanelServerFetch &&
+    Boolean(tableDisplayKey) &&
+    tableRowsFiltersKey !== tableDisplayKey &&
+    (tableQuery.isFetching || tableQuery.isPending);
+
   const isBackgroundRefresh =
     hasListData &&
     tableQuery.isFetching &&
@@ -1497,12 +1502,6 @@ export function useProjectListTablePipeline(
     !isSearchStaging &&
     !hasPanelTableFilters &&
     !isPageTransition;
-
-  const isPageTransition =
-    needsPanelServerFetch &&
-    Boolean(tableDisplayKey) &&
-    tableRowsFiltersKey !== tableDisplayKey &&
-    (tableQuery.isFetching || tableQuery.isPending);
 
   const isFilterRefreshing =
     needsPanelServerFetch &&

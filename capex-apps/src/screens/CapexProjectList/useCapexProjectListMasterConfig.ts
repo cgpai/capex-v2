@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ensureOperationalMasterConfigPack,
@@ -35,10 +35,13 @@ export function useCapexProjectListMasterConfig(userId: number | undefined) {
     assetTypeGroups: [],
   };
 
-  return {
-    categories: data.categories,
-    assetTypes: data.assetTypes,
-    assetTypeGroups: data.assetTypeGroups,
-    reloadMasterConfig,
-  };
+  return useMemo(
+    () => ({
+      categories: data.categories,
+      assetTypes: data.assetTypes,
+      assetTypeGroups: data.assetTypeGroups,
+      reloadMasterConfig,
+    }),
+    [data.categories, data.assetTypes, data.assetTypeGroups, reloadMasterConfig],
+  );
 }
