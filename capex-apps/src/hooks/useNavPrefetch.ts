@@ -43,11 +43,20 @@ export function useNavPrefetch(options: {
   router: AppRouterInstance;
   queryClient: QueryClient;
   selectedPeriodName: string;
+  selectedArchetypeId?: string | null;
   selectedHuId?: string | null;
   currentUser: User | null;
   permissions: PermissionsLike;
 }) {
-  const { router, queryClient, selectedPeriodName, selectedHuId, currentUser, permissions } = options;
+  const {
+    router,
+    queryClient,
+    selectedPeriodName,
+    selectedArchetypeId,
+    selectedHuId,
+    currentUser,
+    permissions,
+  } = options;
 
   return useCallback(
     (page: Page) => {
@@ -95,9 +104,14 @@ export function useNavPrefetch(options: {
         prefetchConfigurationPageCritical(queryClient, currentUser.id);
       }
       if (page === Page.ExecutiveSummary && currentUser?.id && selectedPeriodName.trim()) {
-        prefetchExecutiveDashboard(queryClient, selectedPeriodName, currentUser.id);
+        prefetchExecutiveDashboard(
+          queryClient,
+          selectedPeriodName,
+          currentUser.id,
+          selectedArchetypeId ?? null,
+        );
       }
     },
-    [router, queryClient, selectedPeriodName, selectedHuId, currentUser, permissions],
+    [router, queryClient, selectedPeriodName, selectedArchetypeId, selectedHuId, currentUser, permissions],
   );
 }

@@ -67,7 +67,7 @@ export const ExecutiveDashboardHeader = memo(function ExecutiveDashboardHeader({
             className="bg-transparent border-none p-0 text-sm font-bold text-siloam-text-primary focus:ring-0 cursor-pointer w-full truncate appearance-none"
             value={selectedArchetypeId || ''}
             onChange={(e) => onArchetypeChange?.(e.target.value)}
-            disabled={isMetricsLoading && !isRefreshing}
+            disabled={isMetricsLoading}
           >
             <option value="">Semua Network</option>
             {visibleArchetypes?.map((arch) => (

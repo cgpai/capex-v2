@@ -2,6 +2,23 @@ import React, { memo } from 'react';
 
 const pulse = 'animate-pulse bg-siloam-border/40 rounded';
 
+/** Shown above KPI/charts while a new network filter is loading. */
+export const ExecutiveDashboardFilterLoadingBanner = memo(function ExecutiveDashboardFilterLoadingBanner() {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-xl border border-siloam-blue/25 bg-siloam-blue/5 px-4 py-3 text-sm font-semibold text-siloam-blue animate-fade-in"
+      role="status"
+      aria-live="polite"
+    >
+      <span className="relative flex h-5 w-5 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-siloam-blue/30" />
+        <span className="relative inline-flex h-5 w-5 rounded-full border-2 border-siloam-blue border-t-transparent animate-spin" />
+      </span>
+      <span>Memuat data dashboard untuk filter yang dipilih…</span>
+    </div>
+  );
+});
+
 const KPI_ACCENTS = ['#00529B', '#00A3E0', '#007A5E', '#F2C744', '#00529B', '#00529B'];
 
 export const ExecutiveDashboardKpiSkeleton = memo(function ExecutiveDashboardKpiSkeleton() {

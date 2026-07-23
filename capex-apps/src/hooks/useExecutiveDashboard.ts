@@ -56,7 +56,6 @@ export function useExecutiveDashboard({
     },
     enabled: Boolean(periodName),
     staleTime: STALE_TIME_MS,
-    placeholderData: (prev) => prev,
   });
 
   const metrics = dashboardQuery.data ?? EMPTY_EXECUTIVE_DASHBOARD;
@@ -65,9 +64,17 @@ export function useExecutiveDashboard({
     return mapPeriodHeaderFromMeta(metrics.periodMeta) ?? (periodName ? periodHeaderFallback(periodName) : null);
   }, [metrics.periodMeta, periodName]);
 
-  const isInitialLoad = Boolean(periodName) && dashboardQuery.isPending;
-  const isMetricsLoading = isInitialLoad;
-  const isLoading = isInitialLoad;
+  /** True while metrics for the current filter are not ready (first open or filter change). */
+  const showMetricsSkeleton =
+    Boolean(periodName) &&
+    (dashboardQuery.isPending ||
+      (dashboardQuery.isFetching && dashboardQuery.isPlaceholderData));
+
+  const isInitialLoad = showMetricsSkeleton;
+  const isMetricsLoading = showMetricsSkeleton;
+  const isLoading = showMetricsSkeleton;
+  const isRefreshing =
+    Boolean(periodName) && dashboardQuery.isFetching && !showMetricsSkeleton;
 
   const errorMessage =
     dashboardQuery.isError
@@ -88,10 +95,13 @@ export function useExecutiveDashboard({
     isLoading,
     isMetricsLoading,
     isInitialLoad,
-    isRefreshing: dashboardQuery.isFetching && !dashboardQuery.isPending,
+    isRefreshing,
+    showMetricsSkeleton,
     errorMessage,
     hasPeriod: Boolean(periodName),
-    hasNoDashboardData: Boolean(periodName) && !isInitialLoad && !errorMessage && hasNoDashboardData,
+    hasNoDashboardData:
+      Boolean(periodName) && !showMetricsSkeleton && !errorMessage && hasNoDashboardData,
+    filtersKey,
   };
 }
 

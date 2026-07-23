@@ -313,6 +313,8 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
   const pinnedFilterRef = useRef(readBudgetHuFilterSelection(initialPeriodShell.selectedPeriodName));
   /** True only after user changes archetype/HU via Header controls. */
   const filterUserTouchedRef = useRef(false);
+  /** CEO Dashboard: user explicitly chose "Semua Network" — do not auto-pick first archetype. */
+  const ceoDashboardAllNetworksRef = useRef(false);
 
   // Global state for user and permissions
   const [allUsers, setAllUsers] = useState<User[]>(() => initialBootstrap?.users ?? []);
@@ -936,7 +938,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     scheduleStaggeredIdle([
       () => prefetchBudgetHuPage(queryClient, period, uid, { hospitalUnitId: huId }),
       () => prefetchDashboardBundle(queryClient, period, uid),
-      () => prefetchExecutiveDashboard(queryClient, period, uid),
+      () => prefetchExecutiveDashboard(queryClient, period, uid, selectedArchetypeId ?? null),
       () => prefetchBudgetSiloamPeriod(queryClient, period, uid),
       () => void prefetchPoUpdatePage(queryClient, uid, period),
       () => prefetchBudgetMultiYearPage(queryClient, uid),
@@ -958,13 +960,14 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     (name: string) => {
       setSelectedPeriodName(name);
       filterUserTouchedRef.current = false;
+      ceoDashboardAllNetworksRef.current = false;
       pinnedFilterRef.current = readBudgetHuFilterSelection(name);
       const pin = pinnedFilterRef.current;
       setSelectedArchetypeId(pin?.archetypeId ?? null);
       setSelectedHuId(pin?.huId ?? null);
       if (currentUser?.id) {
         prefetchDashboardBundle(queryClient, name, currentUser.id);
-        prefetchExecutiveDashboard(queryClient, name, currentUser.id);
+        prefetchExecutiveDashboard(queryClient, name, currentUser.id, pin?.archetypeId ?? null);
         prefetchBudgetHuPage(queryClient, name, currentUser.id, {
           hospitalUnitId: pin?.huId ?? undefined,
         });
@@ -1131,10 +1134,15 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     // User picked archetype/unit — never snap back to an older pinned HU from localStorage.
     if (filterUserTouchedRef.current) {
       if (isLoadingBudgetPeriod) return;
+      const allowAllNetworksOnCeo =
+        routePage === Page.ExecutiveSummary &&
+        ceoDashboardAllNetworksRef.current &&
+        !selectedArchetypeId;
       if (visibleArchetypes.length > 0) {
         if (
-          !selectedArchetypeId ||
-          !visibleArchetypes.some((a) => String(a.id) === String(selectedArchetypeId))
+          !allowAllNetworksOnCeo &&
+          (!selectedArchetypeId ||
+            !visibleArchetypes.some((a) => String(a.id) === String(selectedArchetypeId)))
         ) {
           setSelectedArchetypeId(visibleArchetypes[0].id);
         }
@@ -1183,11 +1191,17 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
 
     if (isLoadingBudgetPeriod) return;
 
+    const allowAllNetworksOnCeo =
+      routePage === Page.ExecutiveSummary &&
+      ceoDashboardAllNetworksRef.current &&
+      !selectedArchetypeId;
+
     // No pin: soft defaults only when empty / out of scope.
     if (visibleArchetypes.length > 0) {
       if (
-        !selectedArchetypeId ||
-        !visibleArchetypes.some((a) => String(a.id) === String(selectedArchetypeId))
+        !allowAllNetworksOnCeo &&
+        (!selectedArchetypeId ||
+          !visibleArchetypes.some((a) => String(a.id) === String(selectedArchetypeId)))
       ) {
         setSelectedArchetypeId(visibleArchetypes[0].id);
       }
@@ -1205,6 +1219,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     selectedHuId,
     visibleArchetypes,
     visibleHUs,
+    routePage,
   ]);
 
   useEffect(() => {
@@ -1268,10 +1283,23 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     visibleHUs,
   ]);
 
+  const handleExecutiveArchetypeChange = useCallback((archetypeId: string) => {
+    filterUserTouchedRef.current = true;
+    const trimmed = archetypeId.trim();
+    if (!trimmed) {
+      ceoDashboardAllNetworksRef.current = true;
+      setSelectedArchetypeId(null);
+      return;
+    }
+    ceoDashboardAllNetworksRef.current = false;
+    setSelectedArchetypeId(trimmed);
+  }, []);
+
   const handleArchetypeChange = (archetypeName: string) => {
     const archetype = visibleArchetypes.find((a) => a.name === archetypeName);
     const newArchetypeId = archetype ? archetype.id : null;
     filterUserTouchedRef.current = true;
+    ceoDashboardAllNetworksRef.current = false;
     if (newArchetypeId !== selectedArchetypeId) {
       // Reset HU only when user really changes archetype,
       // not when data refresh remounts/reloads the same archetype.
@@ -1339,6 +1367,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
     router,
     queryClient,
     selectedPeriodName,
+    selectedArchetypeId,
     selectedHuId,
     currentUser,
     permissions,
@@ -1459,7 +1488,7 @@ const App: React.FC<AppProps> = ({ hasSessionCookies = false }) => {
             periodName={selectedPeriodName}
             currentUser={currentUser}
             selectedArchetypeId={selectedArchetypeId}
-            onArchetypeChange={setSelectedArchetypeId}
+            onArchetypeChange={handleExecutiveArchetypeChange}
             visibleArchetypes={visibleArchetypes}
           />
         );

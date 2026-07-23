@@ -18,6 +18,7 @@ import {
   ExecutiveDashboardAlertsSkeleton,
   ExecutiveDashboardAnalysisSkeleton,
   ExecutiveDashboardChartsRowSkeleton,
+  ExecutiveDashboardFilterLoadingBanner,
   ExecutiveDashboardKpiSkeleton,
 } from '../components/organisms/ExecutiveSummary/ExecutiveDashboardSkeletons';
 import { EXECUTIVE_SUMMARY_COLORS } from '../lib/executiveSummary/constants';
@@ -57,11 +58,12 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
   const {
     periodHeader,
     metrics,
-    isInitialLoad,
+    showMetricsSkeleton,
     isRefreshing,
     errorMessage,
     hasPeriod,
     hasNoDashboardData,
+    filtersKey,
   } = useExecutiveDashboard({
     periodName,
     userId: currentUser.id,
@@ -74,7 +76,7 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
   if (!hasPeriod) return <ExecutiveSummarySelectPeriod />;
   if (errorMessage) return <ExecutiveSummaryError message={errorMessage} />;
 
-  const showEmpty = !isInitialLoad && hasNoDashboardData;
+  const showEmpty = !showMetricsSkeleton && hasNoDashboardData;
 
   const updatedLabel = metrics.updatedAt
     ? new Intl.DateTimeFormat('id-ID', {
@@ -94,27 +96,33 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
         selectedArchetypeId={selectedArchetypeId}
         onArchetypeChange={onArchetypeChange}
         isRefreshing={isRefreshing}
-        isMetricsLoading={isInitialLoad}
+        isMetricsLoading={showMetricsSkeleton}
       />
 
       {showEmpty && <ExecutiveSummaryEmptyPeriod />}
 
       <div className="space-y-8">
-        {isInitialLoad ? (
+        {showMetricsSkeleton ? <ExecutiveDashboardFilterLoadingBanner /> : null}
+
+        {showMetricsSkeleton ? (
           <ExecutiveDashboardKpiSkeleton />
         ) : (
           <SectionReveal delayMs={0}>
-            <section aria-label="Ringkasan KPI">
+            <section key={`kpi-${filtersKey}`} aria-label="Ringkasan KPI">
               <ExecutiveDashboardKpiRow metrics={metrics} />
             </section>
           </SectionReveal>
         )}
 
-        {isInitialLoad ? (
+        {showMetricsSkeleton ? (
           <ExecutiveDashboardChartsRowSkeleton />
         ) : (
           <SectionReveal delayMs={60}>
-            <section aria-label="Grafik utama" className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+            <section
+              key={`charts-${filtersKey}`}
+              aria-label="Grafik utama"
+              className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch"
+            >
               <ExecutiveDashboardTrendChart data={metrics.monthlyTrend} />
               <ExecutiveDashboardUnitBarChart units={metrics.budgetByUnit} />
               <ExecutiveDashboardCapexStatusChart status={metrics.capexStatus} />
@@ -123,11 +131,11 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
         )}
 
         <div ref={analysisMount.ref}>
-          {isInitialLoad || !analysisMount.visible ? (
+          {showMetricsSkeleton || !analysisMount.visible ? (
             <ExecutiveDashboardAnalysisSkeleton />
           ) : (
             <SectionReveal delayMs={120}>
-              <section aria-label="Analisis detail">
+              <section key={`analysis-${filtersKey}`} aria-label="Analisis detail">
                 <ExecutiveDashboardAnalysisSection
                   categories={metrics.categoryBreakdown}
                   topInvestments={metrics.topInvestments}
@@ -139,11 +147,13 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
         </div>
 
         <div ref={alertsMount.ref}>
-          {isInitialLoad || !alertsMount.visible ? (
+          {showMetricsSkeleton || !alertsMount.visible ? (
             <ExecutiveDashboardAlertsSkeleton />
           ) : (
             <SectionReveal delayMs={180}>
-              <ExecutiveDashboardAlerts alerts={metrics.alerts} />
+              <section key={`alerts-${filtersKey}`} aria-label="Peringatan">
+                <ExecutiveDashboardAlerts alerts={metrics.alerts} />
+              </section>
             </SectionReveal>
           )}
         </div>
@@ -153,7 +163,7 @@ export const ExecutiveSummaryPage = memo(function ExecutiveSummaryPage({
         <span className="uppercase tracking-widest" style={{ color: EXECUTIVE_SUMMARY_COLORS.header }}>
           Executive Dashboard · {periodHeader?.periodName ?? periodName}
         </span>
-        {!isInitialLoad ? <span>Terakhir diperbarui: {updatedLabel}</span> : null}
+        {!showMetricsSkeleton ? <span>Terakhir diperbarui: {updatedLabel}</span> : null}
       </footer>
     </div>
   );
